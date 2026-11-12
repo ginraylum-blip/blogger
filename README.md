@@ -314,7 +314,7 @@ Readers also get **A− / A / A+** buttons on each post to resize the text for t
 - A menu that folds away on phones.
 
 ---
-
+ 
 ## If something goes wrong
 
 - **The site didn't update:** in Vercel, open your project → **Deployments**. A red one means the last change had a problem. Click it to see which file.
