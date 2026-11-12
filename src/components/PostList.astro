@@ -1,0 +1,25 @@
+---
+import Icon from './Icon.astro';
+import { formatDate, type Post, type Folder, findFolder } from '../lib/tree';
+interface Props { posts: Post[]; tree?: Folder }
+const { posts, tree } = Astro.props;
+---
+<ul class="posts">
+  {posts.map((p) => {
+    const where = tree && p.folderPath ? findFolder(tree, p.folderPath) : undefined;
+    return (
+      <li>
+        <a href={`/${p.path}/`}>
+          <span class="post-title">
+            {p.data.icon && <Icon icon={p.data.icon} kind="file" />}
+            {p.data.title}
+          </span>
+          {p.data.date ? <time datetime={p.data.date.toISOString()}>{formatDate(p.data.date)}</time> : <span />}
+          {where && <span class="where">in {where.name} · {p.minutes} min read</span>}
+          {!where && <span class="where">{p.minutes} min read</span>}
+          {p.data.description && <span class="desc">{p.data.description}</span>}
+        </a>
+      </li>
+    );
+  })}
+</ul>

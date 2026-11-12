@@ -1,0 +1,194 @@
+---
+import site from '../site.config';
+import FolderNode from './FolderNode.astro';
+import Icon from './Icon.astro';
+import type { Folder } from '../lib/tree';
+import friendsData from '../data/friends.json';
+const friendUrls = (friendsData.friends as { url: string }[]).filter((f) => f?.url).map((f) => f.url);
+interface Props { tree: Folder; current: string }
+const { tree, current } = Astro.props;
+---
+<aside class="sidebar panel" id="sidebar" data-friends={JSON.stringify(friendUrls)}>
+  <div class="sidebar-top">
+    <a class="me" href="/">
+      <img src={site.profileImage} alt="" width="40" height="40" />
+      <span>{site.author}</span>
+    </a>
+    <div class="top-buttons">
+      <button class="theme-btn" type="button" aria-label="Color theme: automatic" title="Switch light / dark">
+        <span class="theme-icon" aria-hidden="true"></span>
+      </button>
+      <button class="menu-btn" type="button" aria-controls="drawer" aria-expanded="false">Menu</button>
+    </div>
+  </div>
+
+  <div class="drawer" id="drawer">
+    <div class="search">
+      <label class="visually-hidden" for="search-input">Search posts</label>
+      <input id="search-input" type="search" placeholder="Search…" autocomplete="off" spellcheck="false" />
+      <kbd class="search-key" aria-hidden="true">/</kbd>
+    </div>
+    <div class="search-results" id="search-results" hidden aria-live="polite"></div>
+
+    <nav class="tree" id="tree" aria-label="Folders">
+      <ul>
+        <li class="file">
+          <a href="/" aria-current={current === '' ? 'page' : undefined}>
+            <Icon icon="🏠" />
+            <span class="label">Home</span>
+          </a>
+        </li>
+        {tree.folders.map((f) => <FolderNode folder={f} current={current} />)}
+        {tree.posts.map((p) => (
+          <li class="file">
+            <a href={`/${p.path}/`} aria-current={current === p.path ? 'page' : undefined}>
+              <Icon icon={p.data.icon} kind="file" />
+              <span class="label">{p.data.title}</span>
+            </a>
+          </li>
+        ))}
+        <li class="file">
+          <a href="/garden/" aria-current={current === 'garden' ? 'page' : undefined}>
+            <Icon icon="🌳" />
+            <span class="label">{site.garden.title}</span>
+          </a>
+        </li>
+        <li class="file">
+          <a href="/friends/" aria-current={current === 'friends' ? 'page' : undefined}>
+            <Icon icon="🏆" />
+            <span class="label">Friends</span>
+            <span class="nav-badge" id="friends-badge" hidden></span>
+          </a>
+        </li>
+        <li class="file">
+          <a href="/tags/" aria-current={current === 'tags' ? 'page' : undefined}>
+            <Icon icon="🏷️" />
+            <span class="label">All tags</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</aside>
+
+<script>
+  // ── Phone menu ──
+  const side = document.getElementById('sidebar')!;
+  const menuBtn = side.querySelector<HTMLButtonElement>('.menu-btn')!;
+  menuBtn.addEventListener('click', () => {
+    const open = side.toggleAttribute('data-open');
+    menuBtn.setAttribute('aria-expanded', String(open));
+  });
+
+  // ── Light / dark / automatic ──
+  const themeBtn = side.querySelector<HTMLButtonElement>('.theme-btn')!;
+  const order = ['auto', 'light', 'dark'] as const;
+  const names = { auto: 'automatic', light: 'light', dark: 'dark' };
+  const showTheme = (t: string) => {
+    themeBtn.dataset.theme = t;
+    themeBtn.setAttribute('aria-label', `Color theme: ${names[t as keyof typeof names]}`);
+  };
+  showTheme(document.documentElement.dataset.theme ?? 'auto');
+  themeBtn.addEventListener('click', () => {
+    const now = (document.documentElement.dataset.theme ?? 'auto') as (typeof order)[number];
+    const next = order[(order.indexOf(now) + 1) % order.length];
+    if (next === 'auto') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('theme', next); } catch {}
+    showTheme(next);
+  });
+
+  // ── New posts from friends (checked quietly in the background) ──
+  import { loadPeople, feed, lastSeen } from '../lib/friends';
+  const friendUrls: string[] = JSON.parse(side.dataset.friends || '[]');
+  const badge = document.getElementById('friends-badge');
+  if (friendUrls.length && badge && !location.pathname.startsWith('/friends')) {
+    const check = () =>
+      loadPeople(friendUrls, 15).then((people) => {
+        const seen = lastSeen() || new Date(Date.now() - 7 * 864e5).toISOString();
+        const n = feed(people).filter((i) => i.post.d > seen).length;
+        badge.textContent = n > 9 ? '9+' : String(n);
+        badge.hidden = n === 0;
+        badge.title = `${n} new post${n === 1 ? '' : 's'} from friends`;
+      });
+    ('requestIdleCallback' in window ? requestIdleCallback : setTimeout)(check as any);
+  }
+  document.addEventListener('friends-seen', () => badge && (badge.hidden = true));
+
+  // ── Search ──
+  type Item = { t: string; p: string; f: string; d: string; g: string[]; x: string };
+  const input = document.getElementById('search-input') as HTMLInputElement;
+  const box = document.getElementById('search-results')!;
+  const tree = document.getElementById('tree')!;
+  let items: Item[] | null = null;
+  let selected = 0;
+
+  const load = async () => {
+    if (items) return items;
+    try { items = await (await fetch('/search.json')).json(); } catch { items = []; }
+    return items!;
+  };
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  function snippet(text: string, word: string) {
+    const i = norm(text).indexOf(word);
+    if (i < 0) return '';
+    const start = Math.max(0, i - 40);
+    return (start ? '…' : '') + esc(text.slice(start, i)) + '<mark>' + esc(text.slice(i, i + word.length)) + '</mark>' + esc(text.slice(i + word.length, i + 80)) + '…';
+  }
+
+  async function run() {
+    const q = norm(input.value.trim());
+    if (!q) { box.hidden = true; tree.hidden = false; return; }
+    const words = q.split(/\s+/);
+    const list = await load();
+    const scored = list
+      .map((it) => {
+        const title = norm(it.t), rest = norm([it.d, it.f, it.g.join(' ')].join(' ')), body = norm(it.x);
+        let score = 0;
+        for (const w of words) {
+          if (title.includes(w)) score += 10;
+          else if (rest.includes(w)) score += 4;
+          else if (body.includes(w)) score += 1;
+          else return null;
+        }
+        return { it, score };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b!.score - a!.score)
+      .slice(0, 12) as { it: Item }[];
+
+    selected = 0;
+    box.hidden = false;
+    tree.hidden = true;
+    box.innerHTML = scored.length
+      ? `<ul>${scored.map(({ it }, i) => `<li><a href="/${it.p}/" ${i === 0 ? 'aria-selected="true"' : ''}><strong>${esc(it.t)}</strong><small>${esc(it.f || 'Home')}</small>${norm(it.t).includes(words[0]) ? '' : `<span>${snippet(it.x, words[0])}</span>`}</a></li>`).join('')}</ul>`
+      : `<p class="no-results">Nothing matches “${esc(input.value.trim())}”. Try fewer or different words.</p>`;
+  }
+
+  input.addEventListener('focus', load, { once: true });
+  input.addEventListener('input', run);
+  input.addEventListener('keydown', (e) => {
+    const links = [...box.querySelectorAll<HTMLAnchorElement>('a')];
+    if (e.key === 'Escape') { input.value = ''; run(); input.blur(); }
+    else if (e.key === 'Enter' && links[selected]) { location.href = links[selected].href; }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!links.length) return;
+      links[selected]?.removeAttribute('aria-selected');
+      selected = (selected + (e.key === 'ArrowDown' ? 1 : -1) + links.length) % links.length;
+      links[selected].setAttribute('aria-selected', 'true');
+      links[selected].scrollIntoView({ block: 'nearest' });
+    }
+  });
+  // Press "/" anywhere to jump to search
+  document.addEventListener('keydown', (e) => {
+    const typing = (e.target as HTMLElement).closest('input, textarea, [contenteditable]');
+    if (e.key === '/' && !typing) {
+      e.preventDefault();
+      if (!side.hasAttribute('data-open') && getComputedStyle(menuBtn).display !== 'none') menuBtn.click();
+      input.focus();
+    }
+  });
+</script>

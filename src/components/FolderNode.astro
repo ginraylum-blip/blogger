@@ -1,0 +1,29 @@
+---
+import Icon from './Icon.astro';
+import type { Folder } from '../lib/tree';
+interface Props { folder: Folder; current: string }
+const { folder, current } = Astro.props;
+const inside = current === folder.path || current.startsWith(folder.path + '/');
+---
+<li class="node">
+  <details open={inside}>
+    <summary>
+      <span class="chev" aria-hidden="true"></span>
+      <a href={`/${folder.path}/`} aria-current={current === folder.path ? 'page' : undefined}>
+        <Icon icon={folder.icon} />
+        <span class="label">{folder.name}</span>
+      </a>
+    </summary>
+    <ul>
+      {folder.folders.map((f) => <Astro.self folder={f} current={current} />)}
+      {folder.posts.map((p) => (
+        <li class="file">
+          <a href={`/${p.path}/`} aria-current={current === p.path ? 'page' : undefined}>
+            <Icon icon={p.data.icon} kind="file" />
+            <span class="label">{p.data.title}{p.data.draft && ' (draft)'}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </details>
+</li>

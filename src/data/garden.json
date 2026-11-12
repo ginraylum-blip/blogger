@@ -1,0 +1,12 @@
+{
+  "note": "Filled in by the Journal app's focus tree. The sample trees disappear the first time you save your own garden.",
+  "sessions": [
+    { "id": "2026-11-03T20:10:00.000Z", "species": "oak", "seed": 1171, "goal": 25, "minutes": 31, "words": 640, "sample": true },
+    { "id": "2026-11-05T19:02:00.000Z", "species": "cherry", "seed": 2289, "goal": 15, "minutes": 15, "words": 310, "sample": true },
+    { "id": "2026-11-06T08:44:00.000Z", "species": "pine", "seed": 3307, "goal": 25, "minutes": 18, "words": 402, "sample": true },
+    { "id": "2026-11-08T22:15:00.000Z", "species": "oak", "seed": 4451, "goal": 10, "minutes": 14, "words": 215, "sample": true },
+    { "id": "2026-11-09T17:30:00.000Z", "species": "pine", "seed": 5519, "goal": 45, "minutes": 47, "words": 1105, "sample": true },
+    { "id": "2026-11-10T21:05:00.000Z", "species": "cherry", "seed": 6637, "goal": 25, "minutes": 26, "words": 588, "sample": true },
+    { "id": "2026-11-11T07:50:00.000Z", "species": "oak", "seed": 7703, "goal": 15, "minutes": 9, "words": 180, "sample": true }
+  ]
+}
