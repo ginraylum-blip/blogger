@@ -1,5 +1,5 @@
 # My Notebook
-
+ 
 A personal blog where **folders are sections**. Put a post in a folder and it shows up in
 that section, with a file-tree menu on the side so you can browse everything.
 
