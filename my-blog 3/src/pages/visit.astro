@@ -1,0 +1,120 @@
+---
+// A friend's garden: yoursite.com/visit/?site=their-address
+// Everything is read from their public /stats.json, so it's always up to date with their site.
+import Base from '../layouts/Base.astro';
+import site from '../site.config';
+import '../styles/trees.css';
+import '../styles/garden.css';
+---
+<Base title="A friend’s garden" current="friends" description="Visit a friend’s garden.">
+  <script is:inline type="application/json" id="visit-data" set:html={JSON.stringify({ pixel: site.garden.pixelTrees })}></script>
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true">›</span><a href="/friends/">Friends</a></nav>
+  <div class="visit">
+    <div class="v-head">
+      <span class="v-avatar" id="v-avatar"></span>
+      <div>
+        <h1 id="v-title">A friend’s garden</h1>
+        <p class="lede" id="v-sub">Loading…</p>
+      </div>
+    </div>
+    <form class="v-form" id="v-form">
+      <label for="v-site">Visit someone else’s garden</label>
+      <div><input id="v-site" type="url" inputmode="url" placeholder="their address, like maya.vercel.app" autocomplete="off" autocapitalize="none" spellcheck="false" /><button type="submit">Visit</button></div>
+    </form>
+    <div id="v-body"></div>
+  </div>
+</Base>
+
+<script>
+  import { gardenSceneHtml } from '../lib/garden-scene';
+  import { spriteSvg } from '../lib/sprites';
+  import { ANIMALS, KINDS, unlocked, unlockedAnimals, goalText, hoursText } from '../lib/garden';
+  import { cleanUrl, host, statsProgress, statsSessions, type Stats } from '../lib/friends';
+  import { pixelatePage } from '../lib/pixel';
+
+  const cfg = JSON.parse(document.getElementById('visit-data')!.textContent!) as { pixel: boolean };
+  const $ = (id: string) => document.getElementById(id)!;
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+  const target = new URLSearchParams(location.search).get('site') ?? '';
+
+  $('v-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const h = host(($('v-site') as HTMLInputElement).value);
+    if (h) location.search = `?site=${encodeURIComponent(h)}`;
+  });
+
+  async function load() {
+    const h = host(target);
+    if (!h) { $('v-sub').textContent = 'Type a friend’s website address below to visit their garden.'; return; }
+    if (h === host(location.host)) { location.replace('/garden/'); return; }
+    const url = cleanUrl(h);
+    let s: Stats;
+    try {
+      const res = await fetch(`${url}/stats.json`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status === 404 ? 'their site needs the newest version of the notebook' : `error ${res.status}`);
+      s = await res.json();
+    } catch (e) {
+      $('v-sub').textContent = `Couldn’t open the garden at ${h}: ${(e as Error).message || 'their site didn’t answer'}.`;
+      return;
+    }
+    const name = s.name || h;
+    document.title = `${name}’s garden`;
+    $('v-title').textContent = `${name}’s garden`;
+    if (s.avatar) $('v-avatar').innerHTML = `<img src="${esc(/^https?:/.test(s.avatar) ? s.avatar : url + s.avatar)}" alt="" onerror="this.remove()">`;
+    if (s.private) { $('v-sub').innerHTML = `${esc(name)} keeps their garden private. <a href="${esc(url)}" target="_blank" rel="noopener">Visit their site</a>`; return; }
+
+    const p = statsProgress(s);
+    const sessions = statsSessions(s);
+    const animals = unlockedAnimals(p);
+    const colors = s.colors ?? {};
+    const minutes = sessions.reduce((n, x) => n + x.minutes, 0);
+    $('v-sub').innerHTML = `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(h)}</a>`;
+
+    const scene = gardenSceneHtml({ sessions, animals, colors, pixel: cfg.pixel, empty: `Nothing growing yet. When ${name} finishes a focus session, a tree grows here.` });
+    const hasColors = (s.version ?? 0) >= 3;
+    $('v-body').innerHTML = `
+      <dl class="v-stats">
+        <div><dt>Focused writing</dt><dd>${hoursText(minutes)}</dd></div>
+        <div><dt>Trees</dt><dd>${p.trees}</dd></div>
+        <div><dt>Posts</dt><dd>${p.posts}</dd></div>
+        <div><dt>Longest streak</dt><dd>${p.streak} day${p.streak === 1 ? '' : 's'}</dd></div>
+        <div><dt>Animals</dt><dd>${animals.length} of ${ANIMALS.length}</dd></div>
+      </dl>
+      ${hasColors ? '' : `<p class="v-note">${esc(name)}’s site is on an older version, so their animal colours and word count don’t show yet. They’ll appear once they update.</p>`}
+      <div class="garden-scene" style="height:${scene.height}px" role="img" aria-label="${esc(scene.label)}">${scene.html}</div>
+      <h2>Their animals</h2>
+      ${KINDS.map((k) => `
+        <h3 class="v-kind">${k.title}</h3>
+        <ul class="v-collection">${ANIMALS.filter((a) => a.kind === k.kind).map((a) => {
+          const has = unlocked(a, p);
+          return `<li class="${has ? 'has' : 'locked'}"><span class="v-big">${spriteSvg(a.sprite, 3, has ? a.name : 'A locked animal', has ? colors[a.sprite] : undefined)}</span><strong>${has ? a.name : '???'}</strong><small>${has ? goalText(a) : `at ${goalText(a)}`}</small></li>`;
+        }).join('')}</ul>`).join('')}`;
+    pixelatePage($('v-body'));
+  }
+  load();
+</script>
+
+<style is:global>
+  .visit .v-head { display: flex; gap: 1rem; align-items: center; text-align: left; }
+  .visit .v-head > div { flex: 1; }
+  .visit .v-avatar:empty { display: none; }
+  .visit .v-head h1 { margin: 0; }
+  .visit .v-head .lede { margin: 0.2rem 0 0; font-size: 1rem; }
+  .visit .v-avatar img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; display: block; }
+  .visit .v-form { font-family: var(--font-ui); font-size: 0.85rem; color: var(--muted); margin: 1rem 0; }
+  .visit .v-form div { display: flex; gap: 0.4rem; margin-top: 0.25rem; max-width: 26rem; }
+  .visit .v-form input { flex: 1; min-width: 0; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; }
+  .visit .v-form button { padding: 0.45rem 0.9rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+  .visit .v-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.6rem; margin: 1.5rem 0; font-family: var(--font-ui); }
+  .visit .v-stats div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.7rem 0.9rem; }
+  .visit .v-stats dt { font-size: 0.8rem; color: var(--muted); }
+  .visit .v-stats dd { margin: 0.1rem 0 0; font-size: 1.35rem; font-weight: 700; font-family: var(--font-heading); }
+  .visit .v-note { font-family: var(--font-ui); font-size: 0.9rem; background: var(--highlight); color: var(--ink); padding: 0.6rem 0.9rem; border-radius: var(--radius); }
+  .visit .v-kind { margin: 1.4rem 0 0.5rem; font-size: 1.05rem; }
+  .visit .v-collection { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr)); gap: 0.6rem; font-family: var(--font-ui); }
+  .visit .v-collection li { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; text-align: center; padding: 0.8rem 0.4rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+  .visit .v-collection small { color: var(--muted); font-size: 0.78rem; }
+  .visit .v-big { display: block; margin-bottom: 0.25rem; line-height: 0; }
+  .visit .locked { opacity: 0.55; }
+  .visit .locked .v-big { filter: grayscale(1) brightness(0); opacity: 0.25; }
+</style>

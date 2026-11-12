@@ -1,0 +1,1425 @@
+---
+// The journal app. Open yoursite.com/write on your phone and "Add to Home Screen".
+import site from '../../site.config';
+import { getTree, allFolders } from '../../lib/tree';
+import { googleFontsHref } from '../../lib/fonts';
+import { themeCss, earlyScript } from '../../lib/theme';
+import { allPosts } from '../../lib/tree';
+import garden from '../../data/garden.json';
+import friendsData from '../../data/friends.json';
+import { countWords } from '../../lib/garden';
+import { animalColors, day } from '../../lib/garden-data';
+import '../../styles/trees.css';
+
+const tree = await getTree();
+const posts = allPosts(tree);
+const folders = allFolders(tree).map((f) => ({ path: f.path, name: f.name, depth: f.path.split('/').length - 1 }));
+const config = {
+  ...site.journal,
+  folders,
+  postCount: posts.length,
+  postWords: posts.reduce((n, p) => n + countWords(p.entry.body ?? ''), 0),
+  postDays: [...new Set(posts.filter((p) => p.data.date).map((p) => day(p.data.date!)))],
+  animalColors: animalColors(),
+  builtAt: new Date().toISOString(),
+  gardenSessions: garden.sessions.filter((s: { sample?: boolean }) => !s.sample),
+  pixelTrees: site.garden.pixelTrees,
+  friends: (friendsData.friends as { url: string; name?: string }[]).filter((f) => f?.url),
+};
+const googleHref = googleFontsHref();
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Journal · {site.title}</title>
+    <meta name="robots" content="noindex" />
+    <link rel="manifest" href="/write/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/write/apple-touch-icon.png" />
+    <link rel="icon" href="/write/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Journal" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="theme-color" content={site.colors.light.paper} media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content={site.colors.dark.paper} media="(prefers-color-scheme: dark)" />
+    {googleHref && <link rel="stylesheet" href={googleHref} />}
+    <style is:inline set:html={themeCss()}></style>
+    <script is:inline set:html={earlyScript}></script>
+    <script is:inline type="application/json" id="journal-config" set:html={JSON.stringify(config)}></script>
+  </head>
+  <body>
+    <header class="bar">
+      <button id="menu-btn" class="icon-btn" type="button" aria-label="Settings and past entries">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" /></svg>
+      </button>
+      <span id="status" class="status" aria-live="polite"></span>
+      <button id="publish" class="primary" type="button">Publish</button>
+      <button id="focus-row" class="focus-row" type="button" hidden aria-label="Focus session, open details">
+        <span id="focus-mini" class="focus-mini"></span>
+        <span class="focus-time" id="focus-time">0:00</span>
+        <span class="focus-track"><span id="focus-fill" class="focus-fill"></span></span>
+        <span class="focus-state" id="focus-state">Growing</span>
+      </button>
+    </header>
+    <div id="toast" class="toast" role="status" hidden></div>
+
+    <main class="editor">
+      <p class="when" id="when"></p>
+      <input id="title" class="title" type="text" placeholder="Title (optional)" autocomplete="off" enterkeyhint="next" />
+
+      <div class="tools">
+        <label class="chip">
+          <span aria-hidden="true">📁</span>
+          <span class="visually-hidden">Folder</span>
+          <select id="folder"></select>
+        </label>
+        <button id="focus-chip" class="chip" type="button"><span aria-hidden="true">🌱</span> <span id="focus-chip-text">Focus</span></button>
+        <button id="photo-btn" class="chip" type="button"><span aria-hidden="true">📷</span> Photo</button>
+        <input id="photo-input" type="file" accept="image/*" multiple hidden />
+        <button id="attach-btn" class="chip" type="button"><span aria-hidden="true">📎</span> File</button>
+        <input id="attach-input" type="file" multiple hidden />
+        <button id="private" class="chip" type="button" aria-pressed="false"><span aria-hidden="true">🔒</span> Only me</button>
+        <label class="chip tags">
+          <span aria-hidden="true">🏷️</span>
+          <span class="visually-hidden">Tags, separated by commas</span>
+          <input id="tags" type="text" placeholder="tags" autocomplete="off" autocapitalize="none" />
+        </label>
+      </div>
+
+      <div id="photos" class="photos"></div>
+      <div id="attached" class="attached"></div>
+      <p id="attach-hint" class="attach-hint" hidden>Point at a spot in your file by writing <code>[[p. 4]]</code>, or <code>[[file-name.pdf p. 4]]</code> when there’s more than one. Readers see the file right beside your words.</p>
+      <textarea id="body" class="body" placeholder="What’s on your mind?" autocapitalize="sentences"></textarea>
+    </main>
+
+    <dialog id="settings" class="sheet">
+      <form method="dialog" class="sheet-head">
+        <h2>Journal</h2>
+        <button class="icon-btn" aria-label="Close">✕</button>
+      </form>
+
+      <p id="sheet-note" class="note" hidden></p>
+      <button id="new-entry" class="wide" type="button">Start a new entry</button>
+
+      <section>
+        <h3>Sent from this phone</h3>
+        <ul id="recent" class="recent"></ul>
+      </section>
+
+      <section>
+        <h3>Friends</h3>
+        <ul id="friend-list" class="friend-list"></ul>
+        <div class="add-friend">
+          <label class="visually-hidden" for="friend-input">A friend’s website address</label>
+          <input id="friend-input" type="url" inputmode="url" placeholder="their address, like maya.vercel.app" autocomplete="off" autocapitalize="none" spellcheck="false" />
+          <button id="friend-add" class="primary" type="button">Add</button>
+        </div>
+        <p id="friend-msg" class="hint" aria-live="polite"></p>
+        <p class="hint">Your address to give them: <b id="my-host"></b></p>
+        <a class="wide" href="/friends/" target="_blank" rel="noopener">See what your friends are writing</a>
+      </section>
+
+      <section>
+        <h3>Sign in</h3>
+        <p id="signin-state" class="hint">Checking…</p>
+        <div id="signin-form">
+          <label class="field">Password <input id="signin-password" type="password" autocomplete="current-password" /></label>
+          <button id="signin-btn" class="wide primary" type="button">Sign in</button>
+        </div>
+        <button id="signout-btn" class="wide" type="button" hidden>Sign out on this phone</button>
+        <p id="signin-result" class="hint" aria-live="polite"></p>
+      </section>
+
+      <section>
+        <details class="how" id="key-section">
+          <summary>Or connect with a GitHub access key instead</summary>
+          <p class="hint">Only needed if you haven’t set a password up (see the README). Your access key stays on this phone and is only sent to GitHub.</p>
+        <label class="field">GitHub username <input id="cfg-owner" autocomplete="off" autocapitalize="none" spellcheck="false" /></label>
+        <label class="field">Repository name <input id="cfg-repo" autocomplete="off" autocapitalize="none" spellcheck="false" /></label>
+        <label class="field">Branch <input id="cfg-branch" autocomplete="off" autocapitalize="none" spellcheck="false" /></label>
+        <label class="field">Access key <input id="cfg-token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" /></label>
+        <button id="save-cfg" class="wide primary" type="button">Save and test</button>
+        <p id="cfg-result" class="hint" aria-live="polite"></p>
+        <details class="how inner">
+          <summary>How do I get an access key?</summary>
+          <ol>
+            <li>On GitHub, open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Settings → Developer settings → Fine-grained tokens → Generate new token</a>.</li>
+            <li>Name it “Journal”. Pick an expiration (you can make a new one any time).</li>
+            <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick your blog.</li>
+            <li>Under <b>Permissions → Repository permissions</b>, set <b>Contents</b> to <b>Read and write</b>.</li>
+            <li>Click <b>Generate token</b>, copy it, and paste it above.</li>
+          </ol>
+          <p>This key can only change your blog’s files, nothing else on your account.</p>
+        </details>
+        </details>
+      </section>
+
+      <section>
+        <h3>Put it on your home screen</h3>
+        <p class="hint">In Safari, tap the Share button, then <b>Add to Home Screen</b>.</p>
+      </section>
+    </dialog>
+
+    <dialog id="focus" class="sheet">
+      <form method="dialog" class="sheet-head">
+        <h2>Focus</h2>
+        <button class="icon-btn" aria-label="Close">✕</button>
+      </form>
+
+      <div class="focus-stage">
+        <div id="focus-big" class="focus-big"></div>
+        <p id="focus-big-time" class="focus-big-time"></p>
+        <p id="focus-big-text" class="hint center"></p>
+      </div>
+
+      <div id="focus-setup">
+        <p class="hint center">Your tree grows while you type. If you stop for a bit or leave the app, it waits for you.</p>
+        <p class="label">Pick a seed</p>
+        <div class="seeds" id="seeds" role="radiogroup" aria-label="Tree to grow"></div>
+        <p class="label">How long do you want to write?</p>
+        <div class="goals" id="goals" role="radiogroup" aria-label="Session length">
+          <button type="button" role="radio" data-min="10">10 min</button>
+          <button type="button" role="radio" data-min="15">15 min</button>
+          <button type="button" role="radio" data-min="25">25 min</button>
+          <button type="button" role="radio" data-min="45">45 min</button>
+          <button type="button" role="radio" data-min="60">1 hr</button>
+        </div>
+        <button id="focus-start" class="wide primary" type="button">Plant a tree and start</button>
+      </div>
+
+      <div id="focus-running" hidden>
+        <form method="dialog"><button class="wide primary" type="submit">Keep writing</button></form>
+        <button id="focus-end" class="wide" type="button">End session</button>
+      </div>
+
+      <section>
+        <h3>Your forest</h3>
+        <p id="forest-stats" class="hint"></p>
+        <div id="zoo" class="zoo" aria-label="Animals in your garden"></div>
+        <ul id="forest" class="forest"></ul>
+        <button id="garden-sync" class="wide" type="button" hidden>Show these trees in my garden</button>
+        <p id="garden-sync-text" class="hint" aria-live="polite">Your trees and animals show up at <a href="/garden/" target="_blank" rel="noopener">your garden page</a>. They’re saved there every time you publish.</p>
+      </section>
+    </dialog>
+
+    <dialog id="paint" class="sheet">
+      <form method="dialog" class="sheet-head">
+        <h2 id="paint-title">Colours</h2>
+        <button class="icon-btn" aria-label="Close">✕</button>
+      </form>
+      <div class="paint-stage" id="paint-stage"></div>
+      <p class="hint center">The shape stays the same. Pick a colour for each part.</p>
+      <div id="paint-parts"></div>
+      <button id="paint-save" class="wide primary" type="button">Save colours</button>
+      <button id="paint-reset" class="wide" type="button">Back to the original colours</button>
+      <p id="paint-msg" class="hint center" aria-live="polite"></p>
+    </dialog>
+
+    <dialog id="done" class="sheet small">
+      <h2 id="done-title">Published</h2>
+      <p id="done-text"></p>
+      <a id="done-link" class="wide primary" href="/" target="_blank" rel="noopener">Open it</a>
+      <form method="dialog"><button class="wide" type="submit">Write another</button></form>
+    </dialog>
+
+    <style is:global>
+      *, *::before, *::after { box-sizing: border-box; }
+      :root { color-scheme: light dark; --muted: color-mix(in srgb, var(--ink) 60%, var(--paper)); --line: color-mix(in srgb, var(--ink) 13%, var(--paper)); --surface: color-mix(in srgb, var(--paper) 55%, white); }
+      @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --surface: color-mix(in srgb, var(--paper) 88%, white); } }
+      :root[data-theme="dark"] { --surface: color-mix(in srgb, var(--paper) 88%, white); color-scheme: dark; }
+      html, body { margin: 0; background: var(--paper); color: var(--ink); }
+      body { font-family: var(--font-ui); -webkit-tap-highlight-color: transparent; min-height: 100dvh; }
+      button, input, select, textarea { font: inherit; color: inherit; }
+      button { cursor: pointer; }
+      :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      [hidden] { display: none !important; }
+      .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+      .bar {
+        position: sticky; top: 0; z-index: 5;
+        display: flex; align-items: center; gap: 0.5rem;
+        padding: calc(env(safe-area-inset-top) + 0.5rem) max(0.75rem, env(safe-area-inset-right)) 0.5rem max(0.75rem, env(safe-area-inset-left));
+        background: color-mix(in srgb, var(--paper) 90%, transparent);
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--line);
+      }
+      .status { flex: 1; text-align: center; font-size: 0.82rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .icon-btn { width: 2.5rem; height: 2.5rem; display: grid; place-items: center; background: none; border: 0; border-radius: 8px; }
+      .icon-btn svg { width: 1.4rem; height: 1.4rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+      .primary { background: var(--accent); color: var(--paper); border: 0; border-radius: 999px; padding: 0.5rem 1.1rem; font-weight: 600; }
+      .primary:disabled { opacity: 0.55; }
+
+      .editor { max-width: 40rem; margin: 0 auto; padding: 1rem max(1.1rem, env(safe-area-inset-left)) calc(3rem + env(safe-area-inset-bottom)); }
+      .when { margin: 0.25rem 0 0.2rem; color: var(--muted); font-size: 0.9rem; }
+      .title {
+        width: 100%; border: 0; background: none; padding: 0.2rem 0; outline: none;
+        font-family: var(--font-heading); font-size: 1.65rem; font-weight: 700; line-height: 1.25;
+      }
+      .title::placeholder, .body::placeholder { color: var(--muted); opacity: 0.7; }
+
+      .tools { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.6rem 0 0.9rem; }
+      .chip {
+        display: inline-flex; align-items: center; gap: 0.35rem; min-height: 2.1rem;
+        padding: 0.2rem 0.75rem; border: 1px solid var(--line); border-radius: 999px;
+        background: var(--surface); font-size: 0.88rem; color: var(--ink);
+      }
+      .chip select, .chip input { border: 0; background: none; outline: none; font-size: 16px; padding: 0; max-width: 11rem; }
+      .chip.tags input { width: 6.5rem; }
+      .chip[aria-pressed="true"] { background: var(--highlight); border-color: transparent; font-weight: 600; }
+
+      .photos { display: flex; gap: 0.5rem; overflow-x: auto; }
+      .photos:not(:empty) { margin-bottom: 0.9rem; }
+      .photo { position: relative; flex: none; }
+      .photo img { width: 5.5rem; height: 5.5rem; object-fit: cover; border-radius: 10px; display: block; border: 1px solid var(--line); }
+      .photo button { position: absolute; top: 0.25rem; right: 0.25rem; width: 1.6rem; height: 1.6rem; border-radius: 50%; border: 0; background: rgb(0 0 0 / 0.6); color: white; font-size: 0.8rem; }
+
+      .attached { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+      .attached:not(:empty) { margin-bottom: 0.5rem; }
+      .file-pill { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 100%; padding: 0.35rem 0.4rem 0.35rem 0.7rem; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-size: 0.85rem; }
+      .file-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .file-pill small { color: var(--muted); flex: none; }
+      .file-pill button { flex: none; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 0; background: var(--line); font-size: 0.75rem; }
+      .attach-hint { font-size: 0.82rem; color: var(--muted); margin: 0 0 0.9rem; line-height: 1.45; }
+      .attach-hint code { background: var(--line); padding: 0 0.3em; border-radius: 4px; }
+      .body {
+        width: 100%; min-height: 55dvh; border: 0; background: none; outline: none; resize: none;
+        font-family: var(--font-body); font-size: max(16px, 1.15rem); line-height: 1.65; padding: 0;
+      }
+
+      .sheet {
+        width: min(34rem, 100%); max-height: 92dvh; margin: auto auto 0; border: 0; padding: 1rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom));
+        border-radius: 18px 18px 0 0; background: var(--paper); color: var(--ink); overflow-y: auto;
+      }
+      @media (min-width: 40rem) { .sheet { margin: auto; border-radius: 18px; } }
+      .sheet::backdrop { background: rgb(0 0 0 / 0.35); }
+      .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+      .sheet h2 { font-family: var(--font-heading); margin: 0; font-size: 1.4rem; }
+      .sheet h3 { font-family: var(--font-heading); font-size: 1rem; margin: 1.6rem 0 0.4rem; }
+      .sheet.small { text-align: center; }
+      .sheet.small h2 { margin: 0.5rem 0; }
+      .wide { display: block; width: 100%; text-align: center; padding: 0.75rem; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; text-decoration: none; margin-top: 0.6rem; color: var(--ink); }
+      .wide.primary { border: 0; background: var(--accent); color: var(--paper); }
+      .note { background: var(--highlight); color: var(--ink); border-radius: 12px; padding: 0.7rem 0.9rem; font-size: 0.92rem; line-height: 1.45; margin: 0.25rem 0 0.5rem; }
+      .hint { color: var(--muted); font-size: 0.88rem; margin: 0.3rem 0; line-height: 1.45; }
+      .hint.ok { color: var(--ink); }
+      .field { display: block; font-size: 0.85rem; color: var(--muted); margin-top: 0.6rem; }
+      .field input { display: block; width: 100%; margin-top: 0.2rem; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 16px; }
+      .how { margin-top: 0.75rem; font-size: 0.88rem; line-height: 1.5; }
+      .how summary { color: var(--accent); cursor: pointer; }
+      .how li { margin: 0.35rem 0; }
+      .how a { color: var(--accent); }
+      .recent { list-style: none; padding: 0; margin: 0; }
+      .recent li { border-top: 1px solid var(--line); }
+      .recent a { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0.1rem; color: var(--ink); text-decoration: none; }
+      .recent small { color: var(--muted); white-space: nowrap; }
+      .focus-row {
+        flex-basis: 100%; display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem;
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 0.25rem 0.75rem 0.25rem 0.35rem; text-align: left;
+      }
+      .focus-row[hidden] { display: none; }
+      .bar { flex-wrap: wrap; }
+      .focus-mini { width: 2.4rem; height: 2.4rem; flex: none; }
+      .focus-mini svg, .focus-big svg, .forest svg { width: 100%; height: 100%; display: block; }
+      .focus-time { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.95rem; min-width: 3.2rem; }
+      .focus-track { flex: 1; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+      .focus-fill { display: block; height: 100%; width: 0; background: #5f9e5a; border-radius: inherit; transition: width 0.8s linear; }
+      .focus-fill.bloom { background: linear-gradient(90deg, #5f9e5a, #e9a3bb); }
+      .focus-state { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+      .paused .focus-state { color: var(--ink); font-weight: 600; }
+      .paused .focus-mini, .paused .focus-big { filter: grayscale(0.55); opacity: 0.8; transition: filter 0.6s, opacity 0.6s; }
+
+      .focus-stage { text-align: center; }
+      .focus-big { width: min(13rem, 60vw); aspect-ratio: 180 / 156; margin: 0.25rem auto 0; }
+      .focus-big-time { font-family: var(--font-heading); font-size: 2rem; font-weight: 700; margin: 0.25rem 0 0; font-variant-numeric: tabular-nums; }
+      .center { text-align: center; }
+      .label { font-size: 0.88rem; font-weight: 600; margin: 1rem 0 0.4rem; }
+      .goals { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+      .goals button { flex: 1 1 0; min-width: 0; padding: 0.55rem 0.2rem; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-size: 0.9rem; }
+      .goals button[aria-checked="true"] { background: var(--highlight); border-color: transparent; font-weight: 700; }
+      .seeds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
+      .seeds button { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; padding: 0.4rem 0.2rem 0.45rem; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-size: 0.8rem; }
+      .seeds button .pic { width: 3.6rem; aspect-ratio: 180 / 156; }
+      .seeds button .pic svg { width: 100%; height: 100%; display: block; }
+      .seeds button small { color: var(--muted); font-size: 0.7rem; }
+      .seeds button[aria-checked="true"] { background: var(--highlight); border-color: transparent; font-weight: 700; }
+      .seeds button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .seeds button:disabled .pic { filter: grayscale(1); }
+      .forest { list-style: none; padding: 0; margin: 0.5rem 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(4.4rem, 1fr)); gap: 0.4rem; }
+      .forest li { text-align: center; font-size: 0.75rem; color: var(--muted); }
+      .forest .pic { aspect-ratio: 180 / 156; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); padding: 2px; }
+      .forest .empty { grid-column: 1 / -1; text-align: left; font-size: 0.88rem; }
+
+      .zoo { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.25rem 0 0.5rem; }
+      .zoo button { border: 1px solid transparent; background: none; padding: 2px; border-radius: 8px; line-height: 0; cursor: pointer; }
+      .zoo button:hover, .zoo button:focus-visible { border-color: var(--accent); }
+      .paint-stage { display: grid; place-items: center; background: #dcebd3; border-radius: 14px; padding: 0.8rem; margin: 0.3rem 0 0.4rem; }
+      .paint-part { margin: 0.9rem 0 0; }
+      .paint-part p { margin: 0 0 0.35rem; font-size: 0.88rem; font-weight: 600; }
+      .swatches { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+      .swatches button { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); padding: 0; cursor: pointer; }
+      .swatches button[aria-pressed="true"] { border-color: var(--ink); box-shadow: 0 0 0 2px var(--paper) inset; }
+      .swatches input[type="color"] { width: 34px; height: 34px; border: 0; padding: 0; background: none; cursor: pointer; }
+      .how.inner { margin-top: 0.8rem; }
+      .toast .sprite { display: inline-block; vertical-align: middle; margin-right: 0.5rem; }
+      .focus-mini img, .focus-big img, .forest .pic img, .seeds .pic img { width: 100%; height: 100%; display: block; }
+      .toast {
+        position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 4.5rem); translate: -50% 0; z-index: 20;
+        width: max-content; max-width: calc(100% - 2rem); padding: 0.7rem 1rem; border-radius: 14px;
+        background: var(--ink); color: var(--paper); font-size: 0.92rem; box-shadow: 0 6px 24px rgb(0 0 0 / 0.2);
+      }
+      @media (prefers-reduced-motion: no-preference) { .toast:not([hidden]) { animation: toast-in 0.35s ease-out; } }
+      @keyframes toast-in { from { opacity: 0; translate: -50% -0.5rem; } }
+      .friend-list { list-style: none; padding: 0; margin: 0; }
+      .friend-list li { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.1rem; border-top: 1px solid var(--line); }
+      .friend-list img, .friend-list .av { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; background: var(--line); flex: none; }
+      .friend-list .who { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+      .friend-list .who small { color: var(--muted); font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .friend-list button { width: 2rem; height: 2rem; border-radius: 50%; border: 0; background: var(--line); color: var(--ink); flex: none; }
+      .friend-list .empty { color: var(--muted); font-size: 0.88rem; border: 0; }
+      .add-friend { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+      .add-friend input { flex: 1; min-width: 0; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 16px; }
+      .add-friend .primary { border-radius: 10px; }
+      .recent .empty { color: var(--muted); font-size: 0.88rem; padding: 0.3rem 0; border: 0; }
+    </style>
+
+    <script>
+      import { treeSvg } from '../../lib/focus-tree';
+      import { SPECIES, ANIMALS, unlockedAnimals, progress as gardenProgress, countWords, goalText, type Session as Tree, type Progress } from '../../lib/garden';
+      import { pixelateInto } from '../../lib/pixel';
+      import { spriteSvg, PARTS, SPRITES, cleanColors, type AllColors, type Colors } from '../../lib/sprites';
+      import { loadPeople, connection, host as hostOf, cleanUrl } from '../../lib/friends';
+      // ───────────────────────── Setup ─────────────────────────
+      type Photo = { id: number; blob: Blob; url?: string };
+      type Attached = { name: string; blob: Blob };
+      type Draft = { title: string; body: string; folder: string; tags: string; private: boolean; photos: Photo[]; nextPhoto: number; files: Attached[] };
+      type Cfg = { owner: string; repo: string; branch: string; token: string; session?: string };
+
+      const config = JSON.parse(document.getElementById('journal-config')!.textContent!) as {
+        github: { owner: string; repo: string; branch: string };
+        defaultFolder: string;
+        defaultPrivate: boolean;
+        folders: { path: string; name: string; depth: number }[];
+        postCount: number;
+        postWords: number;
+        postDays: string[];
+        animalColors: AllColors;
+        builtAt: string;
+        gardenSessions: Tree[];
+        pixelTrees: boolean;
+        friends: { url: string; name?: string }[];
+      };
+      const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+      // draw a tree into an element, as pixel art if that's switched on
+      function paintTree(el: HTMLElement, progress: number, seed: number, opts: { species?: string; label?: string }, px = 3) {
+        const svg = treeSvg(progress, seed, { ...opts, inline: config.pixelTrees });
+        if (config.pixelTrees) pixelateInto(el, svg, px);
+        else el.innerHTML = svg;
+      }
+      const titleEl = $<HTMLInputElement>('title');
+      const bodyEl = $<HTMLTextAreaElement>('body');
+      const folderEl = $<HTMLSelectElement>('folder');
+      const tagsEl = $<HTMLInputElement>('tags');
+      const privateEl = $<HTMLButtonElement>('private');
+      const statusEl = $('status');
+      const publishBtn = $<HTMLButtonElement>('publish');
+      const photosEl = $('photos');
+      const settings = $<HTMLDialogElement>('settings');
+      const done = $<HTMLDialogElement>('done');
+
+      const emptyDraft = (): Draft => ({
+        title: '', body: '', folder: config.defaultFolder, tags: '', private: config.defaultPrivate, photos: [], nextPhoto: 1, files: [],
+      });
+      let draft: Draft = emptyDraft();
+
+      // ── Saving on the phone (IndexedDB keeps text and photos even offline) ──
+      const db = new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open('journal', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('drafts');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      async function idb<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T> {
+        const store = (await db).transaction('drafts', mode).objectStore('drafts');
+        return new Promise((res, rej) => { const r = fn(store); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+      }
+      const saveDraft = () => idb('readwrite', (s) => s.put({ ...draft, photos: draft.photos.map(({ id, blob }) => ({ id, blob })) }, 'current'));
+
+      let saveTimer = 0;
+      function changed() {
+        draft.title = titleEl.value;
+        draft.body = bodyEl.value;
+        draft.tags = tagsEl.value;
+        draft.folder = folderEl.value;
+        showStatus();
+        clearTimeout(saveTimer);
+        saveTimer = window.setTimeout(() => saveDraft().then(() => showStatus(true)).catch(() => setStatus('Couldn’t save on this phone')), 400);
+      }
+
+      const words = () => (bodyEl.value.replace(/!\[[^\]]*\]\([^)]*\)/g, '').match(/\S+/g) ?? []).length;
+      const setStatus = (t: string) => (statusEl.textContent = t);
+      function showStatus(saved = false) {
+        const w = words();
+        const count = w ? `${w} word${w === 1 ? '' : 's'}` : '';
+        setStatus([count, saved ? 'Saved on this phone' : ''].filter(Boolean).join(' · '));
+      }
+
+      // ── Fill the screen ──
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const now = () => new Date();
+      $('when').textContent = now().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+      function customFolders(): string[] {
+        try { return JSON.parse(localStorage.getItem('journal-folders') ?? '[]'); } catch { return []; }
+      }
+      function fillFolders(selected: string) {
+        const known = new Set(config.folders.map((f) => f.path));
+        const list = [...config.folders];
+        for (const f of customFolders()) if (!known.has(f)) list.push({ path: f, name: f, depth: 0 });
+        if (selected && !list.some((f) => f.path === selected)) list.push({ path: selected, name: selected, depth: 0 });
+        folderEl.innerHTML = '';
+        folderEl.append(new Option('No folder', ''));
+        for (const f of list) folderEl.append(new Option(`${'  '.repeat(f.depth)}${f.name}`, f.path));
+        folderEl.append(new Option('＋ New folder…', '__new'));
+        folderEl.value = selected;
+      }
+      folderEl.addEventListener('change', () => {
+        if (folderEl.value !== '__new') return changed();
+        const name = prompt('New folder name (use / for a folder inside a folder, like study/chemistry):')?.trim();
+        if (name) {
+          const path = name.split('/').map(slugify).filter(Boolean).join('/');
+          localStorage.setItem('journal-folders', JSON.stringify([...new Set([...customFolders(), path])]));
+          fillFolders(path);
+        } else folderEl.value = draft.folder;
+        changed();
+      });
+
+      function setPrivate(on: boolean) {
+        draft.private = on;
+        privateEl.setAttribute('aria-pressed', String(on));
+        publishBtn.textContent = on ? 'Save draft' : 'Publish';
+      }
+      privateEl.addEventListener('click', () => { setPrivate(!draft.private); changed(); });
+
+      function grow() {
+        bodyEl.style.height = 'auto';
+        bodyEl.style.height = `${Math.max(bodyEl.scrollHeight, window.innerHeight * 0.55)}px`;
+      }
+      bodyEl.addEventListener('input', () => { grow(); changed(); typed(); });
+      titleEl.addEventListener('input', () => { changed(); typed(); });
+      tagsEl.addEventListener('input', changed);
+      titleEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); bodyEl.focus(); } });
+
+      function render() {
+        titleEl.value = draft.title;
+        bodyEl.value = draft.body;
+        tagsEl.value = draft.tags;
+        fillFolders(draft.folder);
+        setPrivate(draft.private);
+        renderPhotos();
+        renderAttached();
+        grow();
+        showStatus(Boolean(draft.body || draft.title));
+        lastWords = words();
+      }
+
+      // ───────────────────────── Photos ─────────────────────────
+      const photoInput = $<HTMLInputElement>('photo-input');
+      $('photo-btn').addEventListener('click', () => photoInput.click());
+      photoInput.addEventListener('change', async () => {
+        const files = [...(photoInput.files ?? [])];
+        photoInput.value = '';
+        for (const file of files) {
+          setStatus('Adding photo…');
+          try {
+            const blob = await shrink(file);
+            const id = draft.nextPhoto++;
+            draft.photos.push({ id, blob });
+            insertAtCursor(`\n\n![Photo](./photo-${id}.jpg)\n\n`);
+          } catch {
+            alert('That photo couldn’t be added. Try a different one.');
+          }
+        }
+        renderPhotos();
+        changed();
+      });
+
+      // Make photos smaller before sending (max 1600px wide, JPEG)
+      async function shrink(file: File): Promise<Blob> {
+        const url = URL.createObjectURL(file);
+        try {
+          const img = new Image();
+          img.src = url;
+          await img.decode();
+          const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.naturalWidth * scale);
+          canvas.height = Math.round(img.naturalHeight * scale);
+          canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+          return await new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej()), 'image/jpeg', 0.82));
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }
+
+      function insertAtCursor(text: string) {
+        const { selectionStart: a, selectionEnd: b, value } = bodyEl;
+        const at = document.activeElement === bodyEl ? a : value.length;
+        bodyEl.value = (value.slice(0, at) + text + value.slice(document.activeElement === bodyEl ? b : value.length)).replace(/^\n+/, '');
+        grow();
+      }
+
+      function renderPhotos() {
+        photosEl.innerHTML = '';
+        for (const p of draft.photos) {
+          p.url ??= URL.createObjectURL(p.blob);
+          const wrap = document.createElement('div');
+          wrap.className = 'photo';
+          wrap.innerHTML = `<img alt="" src="${p.url}"><button type="button" aria-label="Remove photo">✕</button>`;
+          wrap.querySelector('button')!.addEventListener('click', () => {
+            draft.photos = draft.photos.filter((x) => x !== p);
+            bodyEl.value = bodyEl.value.replace(new RegExp(`\\n*!\\[[^\\]]*\\]\\(\\./photo-${p.id}\\.jpg\\)\\n*`, 'g'), '\n\n');
+            renderPhotos();
+            changed();
+          });
+          photosEl.append(wrap);
+        }
+      }
+
+      // ───────────────────────── Files beside the entry ─────────────────────────
+      const attachInput = $<HTMLInputElement>('attach-input');
+      $('attach-btn').addEventListener('click', () => attachInput.click());
+      const mb = (n: number) => `${(n / 1024 / 1024).toFixed(n > 10 * 1024 * 1024 ? 0 : 1)} MB`;
+      const cleanName = (name: string) => {
+        const dot = name.lastIndexOf('.');
+        const ext = dot > 0 ? name.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+        return (slugify(dot > 0 ? name.slice(0, dot) : name) || 'file') + (ext ? `.${ext}` : '');
+      };
+      attachInput.addEventListener('change', () => {
+        for (const file of [...(attachInput.files ?? [])]) {
+          if (file.size > 90 * 1024 * 1024) { alert(`${file.name} is ${mb(file.size)}. Files need to be under 90 MB.`); continue; }
+          if (file.size > 25 * 1024 * 1024 && !confirm(`${file.name} is ${mb(file.size)}. Big files take a while to send. Add it anyway?`)) continue;
+          let name = cleanName(file.name);
+          for (let n = 2; draft.files.some((f) => f.name === name); n++) name = name.replace(/(-\d+)?(\.[^.]+)?$/, `-${n}$2`);
+          draft.files.push({ name, blob: file });
+          insertAtCursor(draft.files.length === 1 ? `[[${name}]] ` : `[[${name}]] `);
+        }
+        attachInput.value = '';
+        renderAttached();
+        changed();
+      });
+      function renderAttached() {
+        const box = $('attached');
+        box.innerHTML = '';
+        for (const f of draft.files) {
+          const pill = document.createElement('div');
+          pill.className = 'file-pill';
+          pill.innerHTML = `<span></span><small>${mb(f.blob.size)}</small><button type="button" aria-label="Remove file">✕</button>`;
+          pill.querySelector('span')!.textContent = `📎 ${f.name}`;
+          pill.querySelector('button')!.addEventListener('click', () => {
+            if (!confirm(`Remove ${f.name}?`)) return;
+            draft.files = draft.files.filter((x) => x !== f);
+            renderAttached();
+            changed();
+          });
+          box.append(pill);
+        }
+        $('attach-hint').hidden = draft.files.length === 0;
+      }
+
+      // ───────────────────────── Connection ─────────────────────────
+      // Signed in with a password: requests go through this site (/api/github), which holds the GitHub key.
+      type SignIn = { session: string; owner: string; repo: string; branch: string };
+      function signIn(): SignIn | null {
+        try { return JSON.parse(localStorage.getItem('journal-session') ?? 'null'); } catch { return null; }
+      }
+      const connected = (cfg: Cfg) => Boolean(cfg.session || (cfg.owner && cfg.repo && cfg.token));
+      function getCfg(): Cfg {
+        const si = signIn();
+        if (si?.session) return { owner: si.owner, repo: si.repo, branch: si.branch || 'main', token: '', session: si.session };
+        let saved: Partial<Cfg> = {};
+        try { saved = JSON.parse(localStorage.getItem('journal-github') ?? '{}'); } catch {}
+        return {
+          owner: saved.owner || config.github.owner,
+          repo: saved.repo || config.github.repo,
+          branch: saved.branch || config.github.branch || 'main',
+          token: saved.token || '',
+        };
+      }
+      const cfgFields = { owner: $<HTMLInputElement>('cfg-owner'), repo: $<HTMLInputElement>('cfg-repo'), branch: $<HTMLInputElement>('cfg-branch'), token: $<HTMLInputElement>('cfg-token') };
+      const cfgResult = $('cfg-result');
+
+      class GitHubError extends Error {}
+      async function gh(cfg: Cfg, path: string, init: RequestInit = {}) {
+        if (cfg.session) return relay(cfg, path, init);
+        let res: Response;
+        try {
+          res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}${path}`, {
+            ...init,
+            headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+          });
+        } catch {
+          throw new GitHubError('No internet connection. Your entry is safe on this phone. Try again when you’re back online.');
+        }
+        if (res.ok) return res.status === 204 ? null : res.json();
+        if (res.status === 401) throw new GitHubError('Your access key isn’t working. It may have expired. Open ☰ and paste a new one.');
+        if (res.status === 403) throw new GitHubError('Your access key can’t change this blog. Give it “Contents: Read and write” for this repository.');
+        if (res.status === 404 && !path.includes('/contents/')) throw new GitHubError(`Can’t find “${cfg.owner}/${cfg.repo}” (or branch “${cfg.branch}”). Check the names in ☰, and that the key has access to this repository.`);
+        const err = new GitHubError(`GitHub said: ${res.status} ${res.statusText}`);
+        (err as any).status = res.status;
+        throw err;
+      }
+
+      async function relay(cfg: Cfg, path: string, init: RequestInit) {
+        let res: Response;
+        try {
+          res = await fetch(`/api/github?path=${encodeURIComponent(path)}`, {
+            ...init,
+            headers: { Authorization: `Bearer ${cfg.session}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+          });
+        } catch {
+          throw new GitHubError('No internet connection. Your entry is safe on this phone. Try again when you’re back online.');
+        }
+        if (res.ok) return res.status === 204 ? null : res.json();
+        const body = await res.json().catch(() => ({}));
+        if (res.status === 401 && body.error === 'signed-out') {
+          localStorage.removeItem('journal-session');
+          throw new GitHubError('You’ve been signed out (sign-ins last 90 days, and changing the password signs everyone out). Open ☰ and sign in again. Your entry is safe on this phone.');
+        }
+        if (body.error === 'github-key') throw new GitHubError('The GitHub key saved in Vercel isn’t working. It may have expired. Make a new one and paste it into GITHUB_TOKEN in Vercel (see the README).');
+        if (body.error === 'github-permission') throw new GitHubError('The GitHub key saved in Vercel can’t change this blog. Give it “Contents: Read and write” for this repository.');
+        if (res.status === 413) throw new GitHubError('That file is too big to send while signed in with a password (about 3 MB each). Make it smaller, or upload it in Pages CMS.');
+        if (res.status === 404 && !path.includes('/contents/') && !body.message) throw new GitHubError('Password sign-in isn’t switched on for this site. See “Sign in with a password” in the README.');
+        const err = new GitHubError(body.error && typeof body.error === 'string' && body.error.length > 20 ? body.error : `GitHub said: ${res.status} ${body.message ?? res.statusText}`);
+        (err as any).status = res.status;
+        throw err;
+      }
+
+      // ── Sign in with a password ──
+      const signinState = $('signin-state');
+      const signinResult = $('signin-result');
+      async function renderSignIn() {
+        const si = signIn();
+        $('signout-btn').hidden = !si;
+        $('signin-form').hidden = Boolean(si);
+        signinResult.textContent = '';
+        if (si) { signinState.className = 'hint ok'; signinState.textContent = `✓ Signed in to ${si.owner}/${si.repo}. You’re ready to publish.`; return; }
+        signinState.className = 'hint';
+        signinState.textContent = 'Type the password you set in Vercel. You’ll stay signed in on this phone for 90 days.';
+        try {
+          const res = await fetch('/api/login', { cache: 'no-store' });
+          const info = res.ok ? await res.json().catch(() => null) : null;
+          if (signIn()) return; // signed in while we were checking
+          if (!info) signinState.textContent = 'Password sign-in isn’t switched on for this site yet. See “Sign in with a password” in the README, or use an access key below.';
+          else if (!info.ready) signinState.textContent = `Almost set up: ${info.problem} See “Sign in with a password” in the README.`;
+        } catch {}
+      }
+      $('signin-btn').addEventListener('click', async () => {
+        const input = $<HTMLInputElement>('signin-password');
+        if (!input.value) { signinResult.textContent = 'Type your password first.'; return; }
+        const btn = $<HTMLButtonElement>('signin-btn');
+        btn.disabled = true;
+        signinResult.textContent = 'Checking…';
+        try {
+          const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: input.value }) });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body.session) { signinResult.textContent = body.error || (res.status === 404 ? 'Password sign-in isn’t switched on for this site yet. See the README.' : `Couldn’t sign in (${res.status}).`); return; }
+          const who = await fetch('/api/whoami', { headers: { Authorization: `Bearer ${body.session}` } }).then((r) => r.json());
+          localStorage.setItem('journal-session', JSON.stringify({ session: body.session, owner: who.owner, repo: who.repo, branch: who.branch }));
+          input.value = '';
+          await renderSignIn();
+        } catch {
+          signinResult.textContent = 'No internet connection. Try again when you’re back online.';
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      $('signin-password').addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') { e.preventDefault(); $('signin-btn').click(); } });
+      $('signout-btn').addEventListener('click', () => {
+        if (!confirm('Sign out on this phone? Your drafts stay here.')) return;
+        localStorage.removeItem('journal-session');
+        renderSignIn();
+      });
+
+      $('save-cfg').addEventListener('click', async () => {
+        const cfg: Cfg = {
+          owner: cfgFields.owner.value.trim(), repo: cfgFields.repo.value.trim(),
+          branch: cfgFields.branch.value.trim() || 'main', token: cfgFields.token.value.trim(),
+        };
+        if (!cfg.owner || !cfg.repo || !cfg.token) { cfgResult.textContent = 'Fill in your username, repository name and access key.'; return; }
+        localStorage.setItem('journal-github', JSON.stringify(cfg));
+        cfgResult.className = 'hint';
+        cfgResult.textContent = 'Checking…';
+        try {
+          await gh(cfg, `/git/ref/heads/${encodeURIComponent(cfg.branch)}`);
+          cfgResult.className = 'hint ok';
+          cfgResult.textContent = `✓ Connected to ${cfg.owner}/${cfg.repo}. You’re ready to publish.`;
+        } catch (e) {
+          cfgResult.textContent = (e as Error).message;
+        }
+      });
+
+      // Send files to GitHub as one change, so the site rebuilds once.
+      async function commitFiles(cfg: Cfg, files: { path: string; content: string }[], message: string) {
+        const send = async () => {
+          const ref = await gh(cfg, `/git/ref/heads/${encodeURIComponent(cfg.branch)}`);
+          const parent = await gh(cfg, `/git/commits/${ref.object.sha}`);
+          const tree = [];
+          for (const f of files) {
+            const blob = await gh(cfg, '/git/blobs', { method: 'POST', body: JSON.stringify({ content: f.content, encoding: 'base64' }) });
+            tree.push({ path: f.path, mode: '100644', type: 'blob', sha: blob.sha });
+          }
+          const newTree = await gh(cfg, '/git/trees', { method: 'POST', body: JSON.stringify({ base_tree: parent.tree.sha, tree }) });
+          const commit = await gh(cfg, '/git/commits', { method: 'POST', body: JSON.stringify({ message, tree: newTree.sha, parents: [ref.object.sha] }) });
+          await gh(cfg, `/git/refs/heads/${encodeURIComponent(cfg.branch)}`, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha }) });
+        };
+        try { await send(); } catch (e) { if ((e as any).status === 422) await send(); else throw e; }
+      }
+
+      // ───────────────────────── Publishing ─────────────────────────
+      function slugify(s: string) {
+        return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+      }
+      function toBase64(bytes: Uint8Array) {
+        let s = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return btoa(s);
+      }
+      // Single line breaks stay as line breaks on the site, like in a notebook.
+      function keepLineBreaks(text: string) {
+        const lines = text.replace(/\r\n/g, '\n').split('\n');
+        let inCode = false;
+        return lines
+          .map((line, i) => {
+            if (/^\s*```/.test(line)) inCode = !inCode;
+            const next = lines[i + 1];
+            const special = /^\s*([-*+]\s|\d+\.\s|#|>|\||```|!\[)/;
+            if (inCode || !line.trim() || next === undefined || !next.trim() || special.test(next) || special.test(line)) return line;
+            return line.replace(/\s*$/, '  ');
+          })
+          .join('\n');
+      }
+
+      async function publish() {
+        const cfg = getCfg();
+        if (!connected(cfg)) {
+          openSettings('Sign in once to publish. Your writing is saved on this phone in the meantime.');
+          return;
+        }
+        if (!bodyEl.value.trim() && !titleEl.value.trim()) { setStatus('Write something first'); bodyEl.focus(); return; }
+
+        publishBtn.disabled = true;
+        setStatus(draft.private ? 'Saving draft…' : 'Publishing…');
+        try {
+          const d = now();
+          const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+          const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+          const title = titleEl.value.trim() || d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+          const folder = folderEl.value === '__new' ? '' : folderEl.value;
+          const dir = `src/content/posts/${folder ? folder + '/' : ''}`;
+          const first = `${day}-${slugify(titleEl.value) || time.replace(':', '')}`;
+          let base = first;
+
+          // Don't overwrite an existing post with the same name
+          for (let n = 2; n < 20; n++) {
+            try { await gh(cfg, `/contents/${dir}${base}.md?ref=${encodeURIComponent(cfg.branch)}`); base = `${first}-${n}`; }
+            catch (e) { if ((e as any).status === 404) break; throw e; }
+          }
+
+          let body = keepLineBreaks(bodyEl.value.trim());
+          const files: { path: string; content: string }[] = [];
+          for (const p of draft.photos) {
+            const marker = `./photo-${p.id}.jpg`;
+            if (!body.includes(marker)) continue;
+            const name = `${base}-photo-${p.id}.jpg`;
+            body = body.split(marker).join(`./${name}`);
+            files.push({ path: dir + name, content: toBase64(new Uint8Array(await p.blob.arrayBuffer())) });
+          }
+          const fileNames: string[] = [];
+          for (const f of draft.files) {
+            if (cfg.session && f.blob.size > 3_200_000) throw new GitHubError(`“${f.name}” is too big to send while signed in with a password (about 3 MB each). Make it smaller, or upload it in Pages CMS.`);
+            const final = `${day}-${f.name}`;
+            body = body.split(`[[${f.name}`).join(`[[${final}`);
+            fileNames.push(final);
+            files.push({ path: dir + final, content: toBase64(new Uint8Array(await f.blob.arrayBuffer())) });
+          }
+          const tags = tagsEl.value.split(',').map((t) => t.trim()).filter(Boolean);
+          const md = [
+            '---',
+            `title: ${JSON.stringify(title)}`,
+            `date: ${day}T${time}:00`,
+            `tags: ${JSON.stringify(tags)}`,
+            ...(fileNames.length ? [`files: ${JSON.stringify(fileNames)}`] : []),
+            ...(draft.private ? ['draft: true'] : []),
+            ...(focusMinutesForEntry() ? [`focusMinutes: ${focusMinutesForEntry()}`] : []),
+            '---',
+            '',
+            body,
+            '',
+          ].join('\n');
+          files.push({ path: `${dir}${base}.md`, content: toBase64(new TextEncoder().encode(md)) });
+
+          // Your garden rides along, so new trees show up on your site too.
+          const gardenUpdate = unsyncedTrees().length ? await gardenFile(cfg) : null;
+          if (gardenUpdate) files.push(gardenUpdate.file);
+
+          await commitFiles(cfg, files, `Journal: ${title}`);
+          if (gardenUpdate) markSynced(gardenUpdate.ids);
+          if (!draft.private) countPublished(countWords(body), day);
+
+          const url = `/${folder ? folder + '/' : ''}${slugify(base)}/`;
+          const recent = JSON.parse(localStorage.getItem('journal-recent') ?? '[]');
+          recent.unshift({ title, url, when: d.toISOString(), private: draft.private });
+          localStorage.setItem('journal-recent', JSON.stringify(recent.slice(0, 30)));
+
+          if (session) { session.entryMs = 0; saveSession(); }
+          const wasPrivate = draft.private;
+          draft.photos.forEach((p) => p.url && URL.revokeObjectURL(p.url));
+          draft = { ...emptyDraft(), folder: draft.folder, private: config.defaultPrivate };
+          await saveDraft();
+          render();
+          setStatus('');
+          $('done-title').textContent = wasPrivate ? 'Saved as a draft' : 'Published';
+          $('done-text').textContent = wasPrivate
+            ? 'Only you can see this. It won’t appear on your site until you untick “draft”.'
+            : 'It will be on your site in about a minute.';
+          const link = $<HTMLAnchorElement>('done-link');
+          link.href = url;
+          link.hidden = wasPrivate;
+          done.showModal();
+        } catch (e) {
+          setStatus('Not sent');
+          alert(e instanceof GitHubError ? e.message : `Something went wrong: ${(e as Error).message}. Your entry is still saved on this phone.`);
+        } finally {
+          publishBtn.disabled = false;
+        }
+      }
+      publishBtn.addEventListener('click', publish);
+
+      // ───────────────────────── Friends ─────────────────────────
+      // Your list, including changes made on this phone that the site hasn't rebuilt with yet.
+      function myFriends(): { url: string; name?: string }[] {
+        try {
+          const saved = JSON.parse(localStorage.getItem('journal-friends') ?? 'null');
+          if (saved && saved.builtAt === config.builtAt) return saved.list;
+        } catch {}
+        return config.friends;
+      }
+      const saveFriendsLocal = (list: { url: string; name?: string }[]) =>
+        localStorage.setItem('journal-friends', JSON.stringify({ builtAt: config.builtAt, list }));
+
+      async function readRepoJson<T>(cfg: Cfg, path: string, fallback: T): Promise<T> {
+        try {
+          const res = await gh(cfg, `/contents/${path}?ref=${encodeURIComponent(cfg.branch)}`);
+          return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(res.content.replace(/\n/g, '')), (c) => c.charCodeAt(0))));
+        } catch (e) {
+          if ((e as any).status === 404) return fallback;
+          throw e;
+        }
+      }
+      async function saveFriends(change: (list: { url: string; name?: string }[]) => { url: string; name?: string }[], message: string) {
+        const cfg = getCfg();
+        if (!connected(cfg)) throw new GitHubError('Sign in first (below), so the app can save your friends list.');
+        const remote = await readRepoJson(cfg, 'src/data/friends.json', { friends: [] as { url: string; name?: string }[] });
+        const list = change((remote.friends ?? []).filter((f) => f?.url));
+        const json = JSON.stringify({ friends: list }, null, 2) + '\n';
+        await commitFiles(cfg, [{ path: 'src/data/friends.json', content: toBase64(new TextEncoder().encode(json)) }], message);
+        saveFriendsLocal(list);
+      }
+
+      const friendMsg = $('friend-msg');
+      async function renderFriends() {
+        $('my-host').textContent = location.host;
+        const ul = $('friend-list');
+        const list = myFriends();
+        if (!list.length) { ul.innerHTML = '<li class="empty">No friends yet. Add one by their website address.</li>'; return; }
+        ul.innerHTML = list.map((f) => `<li data-host="${hostOf(f.url)}"><span class="av"></span><span class="who"><strong></strong><small>Checking…</small></span><button type="button" aria-label="Remove friend">✕</button></li>`).join('');
+        list.forEach((f, i) => {
+          const li = ul.children[i] as HTMLElement;
+          li.querySelector('strong')!.textContent = f.name || hostOf(f.url);
+          li.querySelector('button')!.addEventListener('click', () => removeFriend(f.url, f.name || hostOf(f.url)));
+        });
+        const people = await loadPeople(list.map((f) => f.url), 10);
+        for (const p of people.filter((x) => !x.self)) {
+          const li = ul.querySelector<HTMLElement>(`[data-host="${p.host}"]`);
+          if (!li) continue;
+          const state = p.error ? p.error : p.stats?.private ? '🔒 keeps their stats private' : { mutual: '🤝 Friends', waiting: 'Hasn’t added you back yet', 'added-you': '', none: '' }[connection(location.origin, p, list.map((f) => f.url))];
+          if (p.stats?.name) li.querySelector('strong')!.textContent = p.stats.name;
+          li.querySelector('small')!.textContent = `${p.host}${state ? ' · ' + state : ''}`;
+          const a = p.stats?.avatar;
+          if (a) {
+            const img = document.createElement('img');
+            img.alt = '';
+            img.src = /^https?:/.test(a) ? a : p.url + a;
+            img.onerror = () => img.replaceWith(Object.assign(document.createElement('span'), { className: 'av' }));
+            li.querySelector('.av')!.replaceWith(img);
+          }
+        }
+      }
+
+      $('friend-add').addEventListener('click', addFriend);
+      $('friend-input').addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') { e.preventDefault(); addFriend(); } });
+      async function addFriend() {
+        const input = $<HTMLInputElement>('friend-input');
+        const h = hostOf(input.value);
+        if (!h || !h.includes('.')) { friendMsg.textContent = 'Type their website address, like maya.vercel.app'; return; }
+        if (h === hostOf(location.host)) { friendMsg.textContent = 'That’s your own address. Give it to your friends so they can add you.'; return; }
+        if (myFriends().some((f) => hostOf(f.url) === h)) { friendMsg.textContent = 'They’re already on your list.'; return; }
+        const btn = $<HTMLButtonElement>('friend-add');
+        btn.disabled = true;
+        friendMsg.textContent = `Looking for ${h}…`;
+        try {
+          const people = await loadPeople([cleanUrl(h)], 0);
+          const them = people.find((p) => !p.self)!;
+          if (them.error) { friendMsg.textContent = `Couldn’t find a notebook at ${h} (it ${them.error}). Check the address opens their site.`; return; }
+          const name = them.stats?.name || h;
+          friendMsg.textContent = `Adding ${name}…`;
+          await saveFriends((list) => [...list.filter((f) => hostOf(f.url) !== h), { name, url: h }], `Friends: add ${name}`);
+          input.value = '';
+          const mutual = (them.stats?.friends ?? []).map(hostOf).includes(hostOf(location.host));
+          friendMsg.textContent = mutual
+            ? `🤝 You and ${name} are now friends! Their posts show up on your Friends page in about a minute.`
+            : `✓ Added ${name}. Send them your address (${location.host}) so they can add you back.`;
+          try { sessionStorage.clear(); } catch {}
+          renderFriends();
+        } catch (e) {
+          friendMsg.textContent = (e as Error).message;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+      async function removeFriend(url: string, name: string) {
+        if (!confirm(`Remove ${name} from your friends?`)) return;
+        friendMsg.textContent = `Removing ${name}…`;
+        try {
+          await saveFriends((list) => list.filter((f) => hostOf(f.url) !== hostOf(url)), `Friends: remove ${name}`);
+          friendMsg.textContent = `Removed ${name}.`;
+          renderFriends();
+        } catch (e) {
+          friendMsg.textContent = (e as Error).message;
+        }
+      }
+
+      // ───────────────────────── Menu ─────────────────────────
+      function openSettings(message = '') {
+        const cfg = getCfg();
+        cfgFields.owner.value = cfg.owner;
+        cfgFields.repo.value = cfg.repo;
+        cfgFields.branch.value = cfg.branch;
+        cfgFields.token.value = cfg.token;
+        cfgResult.className = 'hint';
+        cfgResult.textContent = '';
+        const note = $('sheet-note');
+        note.textContent = message;
+        note.hidden = !message;
+        const list = $('recent');
+        const recent: { title: string; url: string; when: string; private: boolean }[] = JSON.parse(localStorage.getItem('journal-recent') ?? '[]');
+        list.innerHTML = recent.length ? '' : '<li class="empty">Nothing yet. Your published entries will show up here.</li>';
+        for (const r of recent) {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = r.url;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.innerHTML = `<span></span><small></small>`;
+          a.querySelector('span')!.textContent = (r.private ? '🔒 ' : '') + r.title;
+          a.querySelector('small')!.textContent = new Date(r.when).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          li.append(a);
+          list.append(li);
+        }
+        settings.showModal();
+        friendMsg.textContent = '';
+        renderFriends();
+        renderSignIn();
+        if (message) $('signin-state').scrollIntoView({ block: 'center' });
+      }
+      $('menu-btn').addEventListener('click', () => openSettings());
+      $('new-entry').addEventListener('click', async () => {
+        if ((bodyEl.value.trim() || titleEl.value.trim()) && !confirm('Clear this entry and start a new one?')) return;
+        draft = { ...emptyDraft(), folder: draft.folder };
+        await saveDraft();
+        render();
+        settings.close();
+        bodyEl.focus();
+      });
+      for (const d of [settings, done]) d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+      done.addEventListener('close', () => bodyEl.focus());
+
+      // ───────────────────────── Focus tree ─────────────────────────
+      // Time only counts while you're typing: if you stop for 30 seconds or leave the app, the tree waits.
+      type Session = { seed: number; goal: number; species: string; activeMs: number; entryMs: number; words: number; started: string; reached: boolean };
+      const IDLE_MS = 30_000;
+      const focusDialog = $<HTMLDialogElement>('focus');
+      const focusRow = $<HTMLButtonElement>('focus-row');
+      let session: Session | null = null;
+      let lastInput = 0;
+      let lastTick = Date.now();
+      let lastWords = 0;
+      let lastDrawn = -1;
+      let goal = Number(localStorage.getItem('focus-goal')) || 25;
+      try { session = JSON.parse(localStorage.getItem('focus-session') ?? 'null'); } catch {}
+
+      const saveSession = () => localStorage.setItem('focus-session', JSON.stringify(session));
+      // trees grown on this phone (older versions saved `when` instead of `id`)
+      const forest = (): Tree[] => {
+        try {
+          return JSON.parse(localStorage.getItem('focus-forest') ?? '[]').map((g: any) => ({ id: g.id ?? g.when, species: g.species ?? 'oak', seed: g.seed, goal: g.goal, minutes: g.minutes, words: g.words }));
+        } catch { return []; }
+      };
+      // this phone's trees plus the ones already on your site (from other devices too)
+      function allTrees(): Tree[] {
+        const byId = new Map<string, Tree>();
+        for (const t of [...config.gardenSessions, ...forest()]) byId.set(t.id, t);
+        return [...byId.values()].sort((a, b) => b.id.localeCompare(a.id));
+      }
+      const totalMin = () => allTrees().reduce((n, t) => n + t.minutes, 0);
+      const syncedIds = (): Set<string> => { try { return new Set(JSON.parse(localStorage.getItem('garden-synced') ?? '[]')); } catch { return new Set(); } };
+      const unsyncedTrees = () => { const done = syncedIds(); const remote = new Set(config.gardenSessions.map((t) => t.id)); return forest().filter((t) => !done.has(t.id) && !remote.has(t.id)); };
+      const markSynced = (ids: string[]) => localStorage.setItem('garden-synced', JSON.stringify([...new Set([...syncedIds(), ...ids])]));
+
+      // Read the garden file on GitHub, add this phone's trees, and return the new version.
+      async function gardenFile(cfg: Cfg) {
+        const path = 'src/data/garden.json';
+        let remote: { note?: string; sessions: Tree[] } = { sessions: [] };
+        try {
+          const res = await gh(cfg, `/contents/${path}?ref=${encodeURIComponent(cfg.branch)}`);
+          const text = new TextDecoder().decode(Uint8Array.from(atob(res.content.replace(/\n/g, '')), (c) => c.charCodeAt(0)));
+          remote = JSON.parse(text);
+        } catch (e) {
+          if ((e as any).status !== 404) throw e;
+        }
+        const byId = new Map<string, Tree>();
+        for (const t of [...(remote.sessions ?? []).filter((t) => !t.sample), ...forest()]) byId.set(t.id, t);
+        const sessions = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+        const json = JSON.stringify({ note: 'Filled in by the Journal app’s focus tree.', sessions }, null, 2) + '\n';
+        return { file: { path, content: toBase64(new TextEncoder().encode(json)) }, ids: forest().map((t) => t.id) };
+      }
+
+      // ── Animals: work out your numbers, and celebrate when a new one moves in ──
+      // Posts sent from this phone count straight away, before the site has rebuilt.
+      type Sent = { builtAt: string; count: number; words: number; days: string[] };
+      function sentHere(): Sent {
+        try {
+          const c = JSON.parse(localStorage.getItem('journal-published') ?? '{}');
+          if (c.builtAt === config.builtAt) return { builtAt: c.builtAt, count: c.count ?? 0, words: c.words ?? 0, days: c.days ?? [] };
+        } catch {}
+        return { builtAt: config.builtAt, count: 0, words: 0, days: [] };
+      }
+      function progressNow(): Progress {
+        const sent = sentHere();
+        return gardenProgress({
+          posts: config.postCount + sent.count,
+          words: config.postWords + sent.words,
+          postDays: [...config.postDays, ...sent.days],
+          sessions: allTrees(),
+        });
+      }
+      function celebrate(before: Progress) {
+        const had = new Set(unlockedAnimals(before).map((a) => a.sprite));
+        const fresh = unlockedAnimals(progressNow()).filter((a) => !had.has(a.sprite));
+        fresh.forEach((a, i) => setTimeout(() => toast(`A ${a.name.toLowerCase()} moved into your garden! (${goalText(a)}) Tap it in your forest to pick its colours.`, a.sprite), 600 + i * 4800));
+      }
+      function countPublished(words: number, day: string) {
+        const before = progressNow();
+        const sent = sentHere();
+        localStorage.setItem('journal-published', JSON.stringify({ builtAt: config.builtAt, count: sent.count + 1, words: sent.words + words, days: [...new Set([...sent.days, day])] }));
+        celebrate(before);
+      }
+
+      // ── Animal colours ──
+      function colorsNow(): AllColors {
+        try {
+          const c = JSON.parse(localStorage.getItem('animal-colors') ?? 'null');
+          if (c && c.builtAt === config.builtAt) return c.colors;
+        } catch {}
+        return config.animalColors;
+      }
+      const SWATCHES = ['#f4f4f6', '#2b2b33', '#9aa1b3', '#a7754c', '#e2702a', '#f5c242', '#ffd166', '#5cc05c', '#1fa59a', '#6ec3ff', '#2a6fd6', '#8e5bd1', '#f48fb1', '#e05a6a', '#ff6b8b', '#b5561c'];
+      const paint = $<HTMLDialogElement>('paint');
+      let painting = '';
+      let picked: Colors = {};
+      function drawPaint() {
+        $('paint-stage').innerHTML = spriteSvg(painting, 9, ANIMALS.find((a) => a.sprite === painting)?.name ?? painting, picked);
+        const base = SPRITES[painting].palette;
+        const box = $('paint-parts');
+        box.innerHTML = '';
+        for (const [k, label] of Object.entries(PARTS[painting] ?? {})) {
+          const now = (picked[k] ?? base[k]).toLowerCase();
+          const div = document.createElement('div');
+          div.className = 'paint-part';
+          div.innerHTML = `<p></p><div class="swatches"></div>`;
+          div.querySelector('p')!.textContent = label;
+          const row = div.querySelector('.swatches')!;
+          for (const c of [base[k].toLowerCase(), ...SWATCHES.filter((x) => x !== base[k].toLowerCase())]) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.style.background = c;
+            b.setAttribute('aria-label', c === base[k].toLowerCase() ? `${label}: original colour` : `${label}: ${c}`);
+            b.setAttribute('aria-pressed', String(c === now));
+            b.addEventListener('click', () => { picked[k] = c; drawPaint(); });
+            row.append(b);
+          }
+          const any = document.createElement('input');
+          any.type = 'color';
+          any.value = now;
+          any.setAttribute('aria-label', `${label}: any colour`);
+          any.addEventListener('input', () => { picked[k] = any.value; $('paint-stage').innerHTML = spriteSvg(painting, 9, painting, picked); });
+          any.addEventListener('change', drawPaint);
+          row.append(any);
+          box.append(div);
+        }
+      }
+      function openPaint(sprite: string) {
+        painting = sprite;
+        picked = { ...(colorsNow()[sprite] ?? {}) };
+        $('paint-title').textContent = `${ANIMALS.find((a) => a.sprite === sprite)?.name ?? sprite} colours`;
+        $('paint-msg').textContent = '';
+        drawPaint();
+        paint.showModal();
+      }
+      $('paint-reset').addEventListener('click', () => { picked = {}; drawPaint(); });
+      $('paint-save').addEventListener('click', async () => {
+        const cfg = getCfg();
+        const msg = $('paint-msg');
+        if (!connected(cfg)) { paint.close(); focusDialog.close(); openSettings('Sign in once so your animals’ colours can be saved to your site.'); return; }
+        const btn = $<HTMLButtonElement>('paint-save');
+        btn.disabled = true;
+        msg.textContent = 'Saving…';
+        try {
+          const base = SPRITES[painting].palette;
+          const mine = cleanColors(painting, Object.fromEntries(Object.entries(picked).filter(([k, v]) => v.toLowerCase() !== base[k]?.toLowerCase())));
+          const remote = await readRepoJson(cfg, 'src/data/animal-colors.json', { note: '', colors: {} as AllColors });
+          const colors: AllColors = { ...(remote.colors ?? {}) };
+          if (Object.keys(mine).length) colors[painting] = mine; else delete colors[painting];
+          const json = JSON.stringify({ note: 'Your animals’ colours. Change them in the Journal app: open Focus, then tap an animal in your forest.', colors }, null, 2) + '\n';
+          await commitFiles(cfg, [{ path: 'src/data/animal-colors.json', content: toBase64(new TextEncoder().encode(json)) }], `Garden: colours for the ${painting}`);
+          localStorage.setItem('animal-colors', JSON.stringify({ builtAt: config.builtAt, colors }));
+          msg.textContent = '🎨 Saved. Your garden (and your friends’ view of it) updates in about a minute.';
+          renderForest();
+        } catch (e) {
+          msg.textContent = (e as Error).message;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      paint.addEventListener('click', (e) => { if (e.target === paint) paint.close(); });
+
+      // ── Seeds ──
+      let species = localStorage.getItem('focus-species') || 'oak';
+      function renderSeeds() {
+        const total = totalMin();
+        if (!SPECIES.some((sp) => sp.id === species && total >= sp.hours * 60)) species = 'oak';
+        const box = $('seeds');
+        box.innerHTML = '';
+        SPECIES.forEach((sp, i) => {
+          const open = total >= sp.hours * 60;
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.setAttribute('role', 'radio');
+          b.setAttribute('aria-checked', String(sp.id === species));
+          b.disabled = !open;
+          b.innerHTML = `<span class="pic"></span><span></span><small></small>`;
+          b.querySelector('span:nth-child(2)')!.textContent = sp.name;
+          b.querySelector('small')!.textContent = open ? '' : `unlocks at ${sp.hours} h`;
+          b.addEventListener('click', () => { species = sp.id; localStorage.setItem('focus-species', species); openFocus(); });
+          box.append(b);
+          paintTree(b.querySelector<HTMLElement>('.pic')!, 1, 101 + i * 7, { species: sp.id, label: sp.name }, 2);
+        });
+      }
+      const progress = (s: Session) => Math.min(2, s.activeMs / (s.goal * 60_000));
+      const clock = (ms: number) => { const m = Math.floor(ms / 60_000); const sec = Math.floor((ms % 60_000) / 1000); return m >= 60 ? `${Math.floor(m / 60)}:${pad(m % 60)}:${pad(sec)}` : `${m}:${pad(sec)}`; };
+      const isActive = () => document.visibilityState === 'visible' && Date.now() - lastInput < IDLE_MS;
+      function focusMinutesForEntry() { return session ? Math.floor(session.entryMs / 60_000) : 0; }
+
+      function typed() {
+        lastInput = Date.now();
+        const w = words();
+        if (session) session.words += Math.max(0, w - lastWords);
+        lastWords = w;
+      }
+
+      let toastTimer = 0;
+      function toast(text: string, sprite?: string) {
+        const t = $('toast');
+        t.textContent = text;
+        if (sprite) t.insertAdjacentHTML('afterbegin', spriteSvg(sprite, 2, '', colorsNow()[sprite]));
+        t.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => (t.hidden = true), 4500);
+      }
+
+      function drawFocus(force = false) {
+                if (!session) {
+          focusRow.hidden = true;
+          $('focus-chip').setAttribute('aria-pressed', 'false');
+          return;
+        }
+        const p = progress(session);
+        const active = isActive();
+        focusRow.hidden = false;
+        focusRow.classList.toggle('paused', !active);
+        focusDialog.classList.toggle('paused', !active);
+        $('focus-time').textContent = clock(session.activeMs);
+        $('focus-chip').setAttribute('aria-pressed', 'true');
+        const fill = $('focus-fill');
+        fill.style.width = `${Math.min(100, p * 100)}%`;
+        fill.classList.toggle('bloom', p >= 1);
+        $('focus-state').textContent = !active ? 'Paused · type to grow' : p >= 1 ? 'Blossoming' : 'Growing';
+        // redraw the tree only when it has visibly changed
+        if (force || Math.abs(p - lastDrawn) > 0.004) {
+          lastDrawn = p;
+          paintTree($('focus-mini'), Math.max(p, 0.03), session.seed, { species: session.species }, 1.5);
+          if (focusDialog.open) paintTree($('focus-big'), Math.max(p, 0.03), session.seed, { species: session.species, label: 'Your tree for this session' }, 4);
+        }
+        if (focusDialog.open) {
+          $('focus-big-time').textContent = clock(session.activeMs);
+          const left = session.goal * 60_000 - session.activeMs;
+          $('focus-big-text').textContent = !active
+            ? 'Paused. Start typing and your tree keeps growing.'
+            : left > 0
+              ? `${Math.ceil(left / 60_000)} min to a full-grown tree · ${session.words} words so far`
+              : `Fully grown. Every extra minute adds blossoms · ${session.words} words`;
+        }
+      }
+
+      function tick() {
+        const t = Date.now();
+        const dt = Math.min(t - lastTick, 2000);
+        lastTick = t;
+        if (!session) return;
+        if (isActive()) {
+          session.activeMs += dt;
+          session.entryMs += dt;
+          if (!session.reached && session.activeMs >= session.goal * 60_000) {
+            session.reached = true;
+            toast('🌳 Your tree is fully grown! Keep writing and it will blossom.');
+          }
+          if (Math.floor(session.activeMs / 1000) % 5 === 0) saveSession();
+        }
+        drawFocus();
+      }
+      setInterval(tick, 1000);
+      document.addEventListener('visibilitychange', () => { lastTick = Date.now(); if (session) saveSession(); drawFocus(); });
+
+      function renderForest() {
+        const all = allTrees();
+        const today = new Date().toDateString();
+        const todayMin = all.filter((g) => new Date(g.id).toDateString() === today).reduce((n, g) => n + g.minutes, 0) + (session ? Math.floor(session.activeMs / 60_000) : 0);
+        const total = totalMin();
+        const animals = unlockedAnimals(progressNow());
+        $('forest-stats').textContent = all.length
+          ? `Today: ${todayMin} min · All time: ${all.length} tree${all.length === 1 ? '' : 's'}, ${total >= 120 ? `${(total / 60).toFixed(1)} hours` : `${total} min`}`
+          : '';
+        const colors = colorsNow();
+        const zoo = $('zoo');
+        zoo.innerHTML = '';
+        for (const a of animals) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.title = `${a.name}: tap to change its colours`;
+          b.innerHTML = spriteSvg(a.sprite, 2, `${a.name}, change colours`, colors[a.sprite]);
+          b.addEventListener('click', () => openPaint(a.sprite));
+          zoo.append(b);
+        }
+        if (animals.length) zoo.insertAdjacentHTML('beforeend', `<p class="hint" style="width:100%;margin:0.2rem 0 0">${animals.length} of ${ANIMALS.length} animals. Tap one to change its colours.</p>`);
+        const list = $('forest');
+        list.innerHTML = all.length ? '' : '<li class="empty">Finish a session of at least a minute and its tree is planted here.</li>';
+        for (const g of all.slice(0, 60)) {
+          const li = document.createElement('li');
+          const date = new Date(g.id).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          li.innerHTML = `<div class="pic"></div>${g.minutes} min`;
+          li.title = `${date} · ${g.words} words`;
+          list.append(li);
+          paintTree(li.querySelector<HTMLElement>('.pic')!, Math.min(2, g.minutes / g.goal), g.seed, { species: g.species, label: `${g.minutes} minutes on ${date}` }, 2);
+        }
+        const waiting = unsyncedTrees().length;
+        const btn = $<HTMLButtonElement>('garden-sync');
+        btn.hidden = waiting === 0;
+        btn.textContent = `Show ${waiting === 1 ? 'this tree' : `these ${waiting} trees`} in my garden now`;
+      }
+
+      $('garden-sync').addEventListener('click', async () => {
+        const cfg = getCfg();
+        const text = $('garden-sync-text');
+        if (!connected(cfg)) { focusDialog.close(); openSettings('Sign in once so your trees can show up in your garden.'); return; }
+        const btn = $<HTMLButtonElement>('garden-sync');
+        btn.disabled = true;
+        text.textContent = 'Saving your garden…';
+        try {
+          const g = await gardenFile(cfg);
+          await commitFiles(cfg, [g.file], 'Garden: new trees');
+          markSynced(g.ids);
+          text.textContent = '🌳 Saved. Your garden page updates in about a minute.';
+          renderForest();
+        } catch (e) {
+          text.textContent = (e as Error).message;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      function openFocus() {
+        $('focus-setup').hidden = Boolean(session);
+        $('focus-running').hidden = !session;
+        for (const b of $('goals').querySelectorAll<HTMLButtonElement>('button')) b.setAttribute('aria-checked', String(Number(b.dataset.min) === goal));
+        if (!session) {
+          renderSeeds();
+          const sp = SPECIES.find((x) => x.id === species)!;
+          paintTree($('focus-big'), 1, 42, { species, label: sp.name }, 4);
+          $('focus-big-time').textContent = `${goal} min`;
+          $('focus-big-text').textContent = `Write for ${goal} focused minutes and your ${sp.name.toLowerCase()} is fully grown.`;
+        }
+        renderForest();
+        focusDialog.showModal();
+        drawFocus(true);
+      }
+
+      $('goals').addEventListener('click', (e) => {
+        const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-min]');
+        if (!b) return;
+        goal = Number(b.dataset.min);
+        localStorage.setItem('focus-goal', String(goal));
+        openFocus();
+      });
+      $('focus-start').addEventListener('click', () => {
+        session = { seed: Math.floor(Math.random() * 2 ** 31), goal, species, activeMs: 0, entryMs: 0, words: 0, started: new Date().toISOString(), reached: false };
+        lastInput = Date.now(); // a little head start
+        lastWords = words();
+        saveSession();
+        focusDialog.close();
+        drawFocus(true);
+        bodyEl.focus();
+      });
+      $('focus-end').addEventListener('click', () => {
+        if (!session) return;
+        const minutes = Math.floor(session.activeMs / 60_000);
+        if (minutes >= 1) {
+          const before = progressNow();
+          const tree: Tree = { id: new Date().toISOString(), species: session.species ?? 'oak', seed: session.seed, goal: session.goal, minutes, words: session.words };
+          localStorage.setItem('focus-forest', JSON.stringify([tree, ...forest()].slice(0, 1000)));
+          toast(minutes >= session.goal ? `🌳 Tree planted in your forest: ${minutes} min, ${session.words} words.` : `🌿 Young tree planted: ${minutes} min, ${session.words} words.`);
+          setTimeout(() => celebrate(before), 4200);
+        } else {
+          toast('That session was under a minute, so no tree this time.');
+        }
+        session = null;
+        localStorage.removeItem('focus-session');
+        focusDialog.close();
+        drawFocus(true);
+      });
+      $('focus-chip').addEventListener('click', openFocus);
+      focusRow.addEventListener('click', openFocus);
+      focusDialog.addEventListener('click', (e) => { if (e.target === focusDialog) focusDialog.close(); });
+      drawFocus(true);
+
+      // ───────────────────────── Start ─────────────────────────
+      idb<Draft | undefined>('readonly', (s) => s.get('current'))
+        .then((saved) => { if (saved) draft = { ...emptyDraft(), ...saved }; })
+        .catch(() => {})
+        .finally(render);
+
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('/write/sw.js', { scope: '/write/' }).catch(() => {});
+    </script>
+  </body>
+</html>

@@ -1,0 +1,354 @@
+---
+// 🏆 Friends: a live leaderboard built from each friend's /stats.json.
+import Base from '../layouts/Base.astro';
+import site from '../site.config';
+import friends from '../data/friends.json';
+import '../styles/trees.css';
+
+const list = (friends.friends as { url: string; name?: string }[]).filter((f) => f && f.url);
+const data = { friends: list, pixel: site.garden.pixelTrees, private: site.visibility === 'private' };
+---
+<Base title="Friends" current="friends" description="Who's writing the most this week?">
+  <script is:inline type="application/json" id="friends-data" set:html={JSON.stringify(data)}></script>
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a></nav>
+  <h1>Friends</h1>
+
+  <div class="fr-strip" id="strip" aria-label="Your friends"></div>
+
+  <div class="tabs" role="tablist" aria-label="Friends">
+    <button type="button" role="tab" id="tab-feed" aria-controls="panel-feed" aria-selected="true">What’s new</button>
+    <button type="button" role="tab" id="tab-board" aria-controls="panel-board" aria-selected="false">Leaderboard</button>
+  </div>
+
+  <section id="panel-feed" role="tabpanel" aria-labelledby="tab-feed">
+    <p class="feed-status" id="feed-status" aria-live="polite">Loading what your friends wrote…</p>
+    <ol class="feed" id="feed"></ol>
+  </section>
+
+  <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" hidden>
+  <p class="lede">Who’s been writing the most? Focus time only counts minutes spent actually typing.</p>
+  <div class="lb-controls">
+    <div class="seg" role="radiogroup" aria-label="Time period" id="period">
+      <button type="button" role="radio" data-v="week" aria-checked="true">This week</button>
+      <button type="button" role="radio" data-v="month" aria-checked="false">This month</button>
+      <button type="button" role="radio" data-v="all" aria-checked="false">All time</button>
+    </div>
+    <div class="seg" role="radiogroup" aria-label="Ranked by" id="metric">
+      <button type="button" role="radio" data-v="focus" aria-checked="true">Focus time</button>
+      <button type="button" role="radio" data-v="trees" aria-checked="false">Trees</button>
+      <button type="button" role="radio" data-v="posts" aria-checked="false">Posts</button>
+      <button type="button" role="radio" data-v="streak" aria-checked="false">Streak</button>
+    </div>
+  </div>
+
+  <p class="lb-banner" id="banner" aria-live="polite">Loading everyone’s gardens…</p>
+  <ol class="lb" id="board"></ol>
+  <p class="lb-foot" id="foot"></p>
+  </section>
+
+  {data.private && (
+    <p class="lb-note">Your site is set to <strong>private</strong>, so your friends can’t see your stats. You can still see theirs.</p>
+  )}
+
+  <details class="lb-how" open={list.length === 0}>
+    <summary>{list.length === 0 ? 'Add your first friend' : 'Add or remove friends'}</summary>
+    <ol>
+      <li>Each friend needs their own copy of this site. Send them <code>notebook-starter.zip</code> and the README steps; it takes about 15 minutes.</li>
+      <li>Swap website addresses. Your address is <code id="my-address"></code> <button type="button" id="copy-address" class="mini-btn">Copy</button>. Add theirs in the Journal app (☰ → Friends), in Pages CMS under <b>Friends</b>, or in <code>src/data/friends.json</code>. They add yours.</li>
+      <li>That’s it. Their numbers update whenever their site does, which is every time they publish or save their garden.</li>
+    </ol>
+  </details>
+</Base>
+
+<script>
+  import { treeSvg } from '../lib/focus-tree';
+  import { pixelateInto } from '../lib/pixel';
+  import { spriteSvg } from '../lib/sprites';
+  import { unlockedAnimals, hoursText } from '../lib/garden';
+  import { statsProgress } from '../lib/friends';
+  import { loadPeople, connection, feed, lastSeen, markSeen, type Stats, type Person } from '../lib/friends';
+
+  const cfg = JSON.parse(document.getElementById('friends-data')!.textContent!) as {
+    friends: { url: string; name?: string }[]; pixel: boolean; private: boolean;
+  };
+  const board = document.getElementById('board')!;
+  const banner = document.getElementById('banner')!;
+  const foot = document.getElementById('foot')!;
+  let period = 'week';
+  let metric = 'focus';
+  let people: Person[] = [];
+
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+  const avatarOf = (p: Person) => {
+    const a = p.stats?.avatar;
+    return a ? (/^https?:/.test(a) ? a : (p.self ? '' : p.url) + a) : '';
+  };
+  const avatarImg = (p: Person, cls: string) =>
+    avatarOf(p)
+      ? `<img class="${cls}" src="${esc(avatarOf(p))}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'), { className: '${cls}' }))">`
+      : `<span class="${cls}"></span>`;
+
+  // ── Dates are counted in your own time zone ──
+  const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function periodStart() {
+    const now = new Date();
+    if (period === 'all') return new Date(0);
+    if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1);
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    return monday;
+  }
+  function streak(s: Stats) {
+    const days = new Set<string>([...(s.posts ?? []), ...(s.sessions ?? []).map((x) => dayKey(new Date(x.d)))]);
+    let n = 0;
+    const d = new Date();
+    if (!days.has(dayKey(d))) d.setDate(d.getDate() - 1); // today isn't over yet
+    while (days.has(dayKey(d))) { n++; d.setDate(d.getDate() - 1); }
+    return n;
+  }
+  function score(s: Stats) {
+    const from = periodStart();
+    const sessions = (s.sessions ?? []).filter((x) => new Date(x.d) >= from);
+    const posts = period === 'all' ? s.postCount ?? (s.posts ?? []).length : (s.posts ?? []).filter((d) => new Date(d + 'T12:00:00') >= from).length;
+    return {
+      focus: sessions.reduce((n, x) => n + x.m, 0),
+      trees: sessions.length,
+      posts,
+      streak: streak(s),
+      words: sessions.reduce((n, x) => n + (x.w ?? 0), 0),
+      recent: [...(s.sessions ?? [])].sort((a, b) => b.d.localeCompare(a.d)).slice(0, 6),
+    };
+  }
+  const show = (m: string, v: number) =>
+    m === 'focus' ? hoursText(v) : m === 'streak' ? `${v} day${v === 1 ? '' : 's'}` : `${v} ${m === 'trees' ? (v === 1 ? 'tree' : 'trees') : v === 1 ? 'post' : 'posts'}`;
+  const ago = (iso?: string) => {
+    if (!iso) return '';
+    const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    return min < 60 ? `${Math.max(1, min)} min ago` : min < 1440 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} days ago`;
+  };
+
+  function render() {
+    const open = people.filter((p) => p.stats && !p.stats.private);
+    const rows = open
+      .map((p) => ({ p, sc: score(p.stats!) }))
+      .sort((a, b) => (b.sc as any)[metric] - (a.sc as any)[metric] || b.sc.focus - a.sc.focus);
+
+    board.innerHTML = '';
+    rows.forEach(({ p, sc }, i) => {
+      const s = p.stats!;
+      const animals = unlockedAnimals(statsProgress(s));
+      const gardenUrl = p.self ? '/garden/' : `/visit/?site=${encodeURIComponent(p.host)}`;
+      const pet = animals[animals.length - 1];
+      const li = document.createElement('li');
+      li.className = `lb-row${p.self ? ' lb-me' : ''}${i < 3 && (sc as any)[metric] > 0 ? ` top${i + 1}` : ''}`;
+      li.innerHTML = `
+        <span class="lb-rank">${i + 1}</span>
+        ${avatarImg(p, 'lb-avatar')}
+        <span class="lb-who">
+          <a href="${esc(p.self ? '/' : p.url)}" ${p.self ? '' : 'target="_blank" rel="noopener"'}>${esc(s.name || p.url)}</a>${p.self ? ' <small>(you)</small>' : ''}
+          <small class="lb-sub">${show('focus', sc.focus)} · ${sc.trees} tree${sc.trees === 1 ? '' : 's'} · ${sc.posts} post${sc.posts === 1 ? '' : 's'} · 🔥 ${sc.streak}</small>
+        </span>
+        <span class="lb-pet" title="${pet ? `${animals.length} animals, newest: ${pet.name}` : 'No animals yet'}">${pet ? spriteSvg(pet.sprite, 1.75, pet.name, s.colors?.[pet.sprite]) : ''}</span>
+        <a class="lb-forest" href="${esc(gardenUrl)}" title="Visit ${p.self ? 'your' : esc(s.name || p.host) + '’s'} garden"></a>
+        <strong class="lb-score">${show(metric, (sc as any)[metric])}</strong>`;
+      board.append(li);
+      const forest = li.querySelector<HTMLElement>('.lb-forest')!;
+      for (const t of sc.recent) {
+        const box = document.createElement('span');
+        box.className = 'lb-tree';
+        forest.append(box);
+        const svg = treeSvg(Math.min(2, t.m / t.g), t.seed, { species: t.s, label: `${t.m} min`, inline: cfg.pixel });
+        if (cfg.pixel) pixelateInto(box, svg, 2); else box.innerHTML = svg;
+      }
+    });
+
+    const lead = rows[0];
+    const label = { week: 'this week', month: 'this month', all: 'overall' }[period];
+    if (!rows.length) banner.textContent = 'Nobody’s stats to show yet.';
+    else if (rows.length === 1) banner.textContent = cfg.friends.length ? 'Waiting on your friends’ sites…' : 'It’s just you so far. Add a friend below to start a competition.';
+    else if ((lead.sc as any)[metric] === 0) banner.textContent = `No one has scored ${label} yet. First one to write wins the lead.`;
+    else banner.textContent = `${lead.p.self ? 'You’re' : `${lead.p.stats!.name} is`} in the lead ${label} with ${show(metric, (lead.sc as any)[metric])}.`;
+
+    const notes: string[] = [];
+    for (const p of people) {
+      if (p.error) notes.push(`${p.url.replace(/^https?:\/\//, '')} ${p.error}`);
+      else if (p.stats?.private) notes.push(`${p.stats.name || p.url} keeps their stats private`);
+    }
+    const fresh = people.filter((p) => !p.self && p.stats?.builtAt).map((p) => `${p.stats!.name}: updated ${ago(p.stats!.builtAt)}`);
+    foot.textContent = [...notes, ...fresh].join(' · ');
+  }
+
+  function wire(id: string, set: (v: string) => void) {
+    const group = document.getElementById(id)!;
+    group.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-v]');
+      if (!b) return;
+      group.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+      set(b.dataset.v!);
+      render();
+    });
+  }
+  wire('period', (v) => (period = v));
+  wire('metric', (v) => (metric = v));
+
+  // ── Your friends, and how you're connected ──
+  const myFriends = cfg.friends.map((f) => f.url);
+  function renderStrip() {
+    const strip = document.getElementById('strip')!;
+    const others = people.filter((p) => !p.self);
+    strip.innerHTML = others.length ? '' : '<p class="fr-empty">No friends added yet. See “Add your first friend” below.</p>';
+    for (const p of others) {
+      const state = p.error ? 'error' : p.stats?.private ? 'private' : connection(location.origin, p, myFriends);
+      const label = {
+        mutual: '🤝 Friends',
+        waiting: 'Hasn’t added you yet',
+        'added-you': 'Added you',
+        none: '',
+        private: '🔒 Private',
+        error: p.error ?? 'Can’t reach',
+      }[state];
+      const a = document.createElement('div');
+      a.className = `fr-chip ${state}`;
+      if (state === 'waiting') a.title = `Send ${p.stats?.name ?? 'them'} your address so they can add you back`;
+      const canVisit = p.stats && !p.stats.private;
+      a.innerHTML = `${avatarImg(p, 'fr-avatar')}<span><a href="${esc(p.url)}" target="_blank" rel="noopener"><strong>${esc(p.stats?.name || p.host)}</strong></a><small>${esc(label)}${canVisit ? `${label ? ' · ' : ''}<a href="/visit/?site=${encodeURIComponent(p.host)}">🌳 Visit garden</a>` : ''}</small></span>`;
+      strip.append(a);
+    }
+  }
+
+  // ── What's new: everyone's latest posts in one timeline ──
+  function when(iso: string) {
+    const d = new Date(iso);
+    const dateOnly = iso.endsWith('T00:00:00.000Z');
+    const min = (Date.now() - d.getTime()) / 60000;
+    if (!dateOnly && min >= 0 && min < 60) return `${Math.max(1, Math.round(min))} min ago`;
+    if (!dateOnly && min >= 0 && min < 1440) return `${Math.round(min / 60)} h ago`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(dateOnly ? { timeZone: 'UTC' } : {}) });
+  }
+  function renderFeed() {
+    const list = document.getElementById('feed')!;
+    const status = document.getElementById('feed-status')!;
+    const items = feed(people);
+    const seen = lastSeen();
+    const fresh = items.filter((i) => seen && i.post.d > seen).length;
+    list.innerHTML = '';
+    if (!cfg.friends.length) status.textContent = 'Add a friend and their newest posts show up here.';
+    else if (!items.length) status.textContent = 'Your friends haven’t posted anything yet.';
+    else status.textContent = fresh ? `${fresh} new post${fresh === 1 ? '' : 's'} since you last looked.` : 'You’re all caught up.';
+    for (const { person: p, post } of items.slice(0, 60)) {
+      const isNew = Boolean(seen) && post.d > seen;
+      const li = document.createElement('li');
+      li.className = `feed-item${isNew ? ' is-new' : ''}`;
+      li.innerHTML = `
+        ${avatarImg(p, 'feed-avatar')}
+        <div class="feed-body">
+          <p class="feed-meta"><a href="${esc(p.url)}" target="_blank" rel="noopener"><strong>${esc(p.stats!.name || p.host)}</strong></a>${post.f ? ` in ${esc(post.f)}` : ''} · <time datetime="${esc(post.d)}">${when(post.d)}</time>${isNew ? ' <span class="new-badge">New</span>' : ''}</p>
+          <h2 class="feed-title"><a href="${esc(p.url + post.p)}" target="_blank" rel="noopener">${post.icon ? esc(post.icon) + ' ' : ''}${esc(post.t)}</a></h2>
+          ${post.x ? `<p class="feed-excerpt">${esc(post.x)}</p>` : ''}
+          <p class="feed-foot">${post.min} min read${post.fm ? ` · 🌳 written in ${post.fm} focused min` : ''}</p>
+        </div>`;
+      list.append(li);
+    }
+  }
+
+  // ── Tabs ──
+  const tabs = { feed: document.getElementById('tab-feed')!, board: document.getElementById('tab-board')! };
+  function openTab(name: 'feed' | 'board') {
+    for (const [k, t] of Object.entries(tabs)) {
+      t.setAttribute('aria-selected', String(k === name));
+      document.getElementById(`panel-${k}`)!.hidden = k !== name;
+    }
+    if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
+  }
+  tabs.feed.addEventListener('click', () => openTab('feed'));
+  tabs.board.addEventListener('click', () => openTab('board'));
+  if (location.hash === '#board') openTab('board');
+
+  // ── Your address, to give to friends ──
+  document.getElementById('my-address')!.textContent = location.host;
+  document.getElementById('copy-address')!.addEventListener('click', async (e) => {
+    const b = e.currentTarget as HTMLButtonElement;
+    try { await navigator.clipboard.writeText(location.host); b.textContent = 'Copied'; } catch { b.textContent = 'Select and copy'; }
+  });
+
+  loadPeople(myFriends, 0).then((all) => {
+    people = all;
+    renderStrip();
+    renderFeed();
+    render();
+    markSeen();
+    document.dispatchEvent(new CustomEvent('friends-seen'));
+  });
+</script>
+
+<style is:global>
+  .fr-strip { display: flex; gap: 0.5rem; overflow-x: auto; padding: 0.25rem 0 0.5rem; margin-bottom: 0.75rem; font-family: var(--font-ui); max-width: none !important; }
+  .fr-empty { color: var(--muted); font-size: 0.9rem; margin: 0; }
+  .fr-chip { flex: none; display: flex; align-items: center; gap: 0.55rem; padding: 0.4rem 0.8rem 0.4rem 0.4rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); text-decoration: none; }
+  .fr-chip:hover { border-color: var(--accent); }
+  .fr-chip span { display: flex; flex-direction: column; line-height: 1.2; }
+  .fr-chip strong { font-size: 0.9rem; }
+  .fr-chip small { font-size: 0.75rem; color: var(--muted); }
+  .fr-chip a { color: inherit; text-decoration: none; }
+  .fr-chip small a { color: var(--accent); }
+  .fr-chip small a:hover { text-decoration: underline; }
+  .fr-chip.mutual small { color: var(--ink); }
+  .fr-chip.added-you { border-color: var(--highlight); background: color-mix(in srgb, var(--highlight) 35%, var(--surface)); }
+  .fr-chip.error { opacity: 0.6; }
+  .fr-avatar { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; background: var(--line); display: block; flex: none; }
+  .tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--line); margin-bottom: 1.25rem; font-family: var(--font-ui); }
+  .tabs button { font: inherit; font-weight: 600; font-size: 0.95rem; border: 0; background: none; color: var(--muted); padding: 0.55rem 0.9rem; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .feed-status { font-family: var(--font-ui); color: var(--muted); font-size: 0.92rem; }
+  .feed { list-style: none; padding: 0; margin: 0; }
+  .feed-item { position: relative; display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: 0.85rem; padding: 1.1rem 0; border-top: 1px solid var(--line); }
+  .feed-item.is-new::before { content: ""; position: absolute; left: -0.9rem; top: 1.1rem; bottom: 1.1rem; width: 3px; border-radius: 3px; background: var(--highlight); }
+  .feed-avatar { width: 2.6rem; height: 2.6rem; border-radius: 50%; object-fit: cover; background: var(--line); display: block; }
+  .feed-meta, .feed-foot { margin: 0; font-family: var(--font-ui); font-size: 0.85rem; color: var(--muted); }
+  .feed-meta a { color: var(--ink); text-decoration: none; }
+  .new-badge { background: var(--highlight); color: var(--ink); font-weight: 700; font-size: 0.72rem; padding: 0.05rem 0.45rem; border-radius: 99px; margin-left: 0.25rem; }
+  .feed-title { font-size: 1.2rem; margin: 0.2rem 0 0.3rem; }
+  .feed-title a { color: var(--ink); text-decoration: none; }
+  .feed-title a:hover { color: var(--accent); }
+  .feed-excerpt { margin: 0 0 0.35rem; color: var(--ink); line-height: 1.55; font-size: 1rem; }
+  .mini-btn { font: inherit; font-size: 0.8rem; padding: 0.1rem 0.5rem; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+  .lb-controls { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 1.25rem 0 1rem; font-family: var(--font-ui); }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); }
+  .seg button { font: inherit; font-size: 0.88rem; border: 0; background: none; color: var(--muted); padding: 0.4rem 0.8rem; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-checked="true"] { background: var(--highlight); color: var(--ink); font-weight: 700; }
+  .lb-banner { font-family: var(--font-heading); font-size: 1.15rem; font-weight: 600; margin: 0 0 0.75rem; }
+  .lb { list-style: none; padding: 0; margin: 0; font-family: var(--font-ui); max-width: 48rem !important; }
+  .lb-row {
+    display: grid; grid-template-columns: 2rem 2.6rem minmax(0, 1fr) auto auto; grid-template-areas: "rank av who pet score" "rank av forest forest forest";
+    align-items: center; gap: 0.15rem 0.75rem; padding: 0.7rem 0.9rem; margin-bottom: 0.5rem;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  }
+  .lb-row.lb-me { border-color: var(--accent); }
+  .lb-rank { grid-area: rank; width: 1.8rem; height: 1.8rem; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--line); font-size: 0.9rem; }
+  .top1 .lb-rank { background: #f2c94c; color: #3d2f00; }
+  .top2 .lb-rank { background: #cfd6de; color: #2b3138; }
+  .top3 .lb-rank { background: #e0a46c; color: #3b2108; }
+  .lb-avatar { grid-area: av; width: 2.6rem; height: 2.6rem; border-radius: 50%; object-fit: cover; background: var(--line); border: 1px solid var(--line); }
+  .lb-who { grid-area: who; min-width: 0; }
+  .lb-who a { color: var(--ink); font-weight: 700; text-decoration: none; }
+  .lb-who a:hover { color: var(--accent); }
+  .lb-who small { color: var(--muted); font-weight: 400; }
+  .lb-sub { display: block; font-size: 0.8rem; }
+  .lb-pet { grid-area: pet; line-height: 0; }
+  .lb-score { grid-area: score; font-family: var(--font-heading); font-size: 1.1rem; white-space: nowrap; text-align: right; }
+  .lb-forest { grid-area: forest; display: flex; gap: 0.15rem; min-height: 0; text-decoration: none; border-radius: 6px; }
+  .lb-forest:hover { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .lb-forest:empty { display: none; }
+  .lb-tree { width: 2.6rem; aspect-ratio: 180 / 156; }
+  .lb-tree img, .lb-tree svg { width: 100%; height: 100%; display: block; }
+  .lb-foot { color: var(--muted); font-family: var(--font-ui); font-size: 0.82rem; margin-top: 0.5rem; }
+  .lb-note { font-family: var(--font-ui); font-size: 0.9rem; background: var(--line); padding: 0.6rem 0.9rem; border-radius: var(--radius); }
+  .lb-how { margin-top: 2rem; font-family: var(--font-ui); font-size: 0.95rem; }
+  .lb-how summary { cursor: pointer; font-weight: 600; }
+  .lb-how li { margin: 0.4rem 0; }
+  @media (max-width: 34rem) {
+    .lb-row { grid-template-columns: 1.8rem 2.2rem minmax(0, 1fr) auto; grid-template-areas: "rank av who score" "forest forest forest pet"; }
+    .lb-avatar { width: 2.2rem; height: 2.2rem; }
+  }
+</style>

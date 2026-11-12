@@ -1,0 +1,31 @@
+/* The garden scene: used on your garden page, the home page and friends' gardens. */
+.garden-scene {
+    position: relative; overflow: hidden; border-radius: var(--radius); border: 1px solid var(--line);
+    background:
+      radial-gradient(ellipse 60% 40px at 50% 0, color-mix(in srgb, white 45%, transparent), transparent),
+      linear-gradient(#dfeedd 0, #cfe4c4 70px, #c3dcb4);
+    min-height: 160px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .garden-scene { background: linear-gradient(#1d2a24 0, #20332a 70px, #233a2c); }
+  }
+  :root[data-theme="dark"] .garden-scene { background: linear-gradient(#1d2a24 0, #20332a 70px, #233a2c); }
+  .garden-empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 1rem 2rem; margin: 0; color: var(--muted); font-family: var(--font-ui); }
+  .g-tree { position: absolute; translate: -50% 0; aspect-ratio: 180 / 156; }
+  .g-tree svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .g-tree .t-soil { opacity: 0.55; }
+  .g-tree[data-pixel-tree]:not(.pixel-ready) { visibility: hidden; }
+  @media (scripting: none) { .g-tree[data-pixel-tree] { visibility: visible !important; } }
+
+  .g-animal { position: absolute; left: var(--from); line-height: 0; translate: -50% 0; animation: walk var(--dur) ease-in-out var(--delay) infinite alternate; }
+  .g-flip, .g-hop { display: inline-block; }
+  .g-flip { animation: flip calc(var(--dur) * 2) steps(1, end) var(--delay) infinite; }
+  .g-hop { animation: hop 0.9s ease-in-out infinite; }
+  .flies .g-hop { animation: float 3.2s ease-in-out infinite; }
+  @keyframes walk { from { left: var(--from); } to { left: var(--to); } }
+  @keyframes flip { 0% { transform: scaleX(-1); } 50% { transform: scaleX(1); } }
+  @keyframes hop { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-5px); } }
+  @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .g-animal, .g-flip, .g-hop { animation: none; }
+  }

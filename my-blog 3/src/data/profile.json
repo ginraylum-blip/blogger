@@ -1,0 +1,26 @@
+{
+  "title": "My Notebook",
+  "author": "Your Name",
+  "bio": "Studying things, thinking out loud, and writing it all down.",
+  "url": "https://example.com",
+  "profileImage": "/images/profile.svg",
+  "favicon": "📓",
+  "background": {
+    "image": "",
+    "panelOpacity": 0.88,
+    "blur": 6
+  },
+  "links": [
+    {
+      "label": "Email",
+      "url": "mailto:you@example.com",
+      "icon": "✉️"
+    },
+    {
+      "label": "Instagram",
+      "url": "https://instagram.com/yourname",
+      "icon": "📷"
+    }
+  ],
+  "visibility": "public"
+}

@@ -1,0 +1,338 @@
+---
+// Shows a post's files next to the writing. Works with PDFs, images, text and code,
+// audio and video. Other files (Word, PowerPoint…) get a download button.
+import type { Attachment } from '../lib/files';
+interface Props { files: Attachment[] }
+const { files } = Astro.props;
+const icon = (k: string) => ({ pdf: '📄', image: '🖼️', text: '📝', audio: '🎧', video: '🎬' } as Record<string, string>)[k] ?? '📎';
+---
+<aside class="viewer" id="viewer" aria-label="Files for this post">
+  <script is:inline type="application/json" id="viewer-files" set:html={JSON.stringify(files)}></script>
+
+  <button class="v-bar" type="button" aria-expanded="false" aria-controls="v-panel">
+    <span aria-hidden="true" id="v-bar-icon">{icon(files[0].kind)}</span>
+    <span class="v-bar-name" id="v-bar-name">{files[0].name}</span>
+    <span class="v-bar-where" id="v-bar-where"></span>
+    <span class="v-bar-chev" aria-hidden="true"></span>
+  </button>
+
+  <div class="v-panel" id="v-panel">
+    <div class="v-head">
+      {files.length > 1 ? (
+        <div class="v-tabs" role="tablist" aria-label="Files">
+          {files.map((f, i) => (
+            <button type="button" role="tab" class="v-tab" data-i={i} aria-selected={i === 0 ? 'true' : 'false'} title={f.name}>
+              <span aria-hidden="true">{icon(f.kind)}</span> <span class="v-tab-name">{f.name}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p class="v-title"><span aria-hidden="true">{icon(files[0].kind)}</span> {files[0].name}</p>
+      )}
+      <div class="v-tools">
+        <span class="v-pager" id="v-pager" hidden>
+          <button type="button" id="v-prev" aria-label="Previous page">‹</button>
+          <span id="v-page">1 / 1</span>
+          <button type="button" id="v-next" aria-label="Next page">›</button>
+        </span>
+        <label class="v-follow" title="Move the file along as you scroll the notes">
+          <input type="checkbox" id="v-follow" checked /> Follow along
+        </label>
+        <a id="v-open" class="v-open" href={files[0].url || '#'} target="_blank" rel="noopener">Open ↗</a>
+      </div>
+    </div>
+    <div class="v-body" id="v-body" tabindex="0"></div>
+  </div>
+</aside>
+
+<script>
+  import { fmtTime } from '../lib/remark-refs.mjs';
+
+  type File = { name: string; url: string; kind: string; ext: string; missing?: boolean };
+  type Spot = { page?: number; line?: number; time?: number };
+
+  const files: File[] = JSON.parse(document.getElementById('viewer-files')!.textContent!);
+  const viewer = document.getElementById('viewer')!;
+  const body = document.getElementById('v-body')!;
+  const bar = viewer.querySelector<HTMLButtonElement>('.v-bar')!;
+  const pager = document.getElementById('v-pager')!;
+  const pageLabel = document.getElementById('v-page')!;
+  const openLink = document.getElementById('v-open') as HTMLAnchorElement;
+  const follow = document.getElementById('v-follow') as HTMLInputElement;
+  const isPhone = () => matchMedia('(max-width: 63.99rem)').matches;
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let current = -1;
+  let goTo: (spot: Spot, smooth: boolean) => void = () => {};
+  let currentPage = 1;
+  let manualUntil = 0; // after you scroll the file yourself, "follow along" waits a moment
+
+  // ── Which file does a link point to? ──
+  const base = (s: string) => decodeURIComponent(s.split('#')[0].split('?')[0].split('/').pop() ?? '');
+  function fileIndex(name: string) {
+    const b = base(name);
+    if (!b || b === '__first') return 0;
+    return files.findIndex((f) => f.name === b);
+  }
+
+  // ── Show one file ──
+  async function show(i: number, spot: Spot = {}, smooth = true) {
+    if (!files[i]) return;
+    if (i !== current) {
+      current = i;
+      const f = files[i];
+      viewer.querySelectorAll<HTMLElement>('.v-tab').forEach((t) => t.setAttribute('aria-selected', String(Number(t.dataset.i) === i)));
+      document.getElementById('v-bar-name')!.textContent = f.name;
+      openLink.href = f.url || '#';
+      openLink.hidden = !f.url;
+      pager.hidden = true;
+      body.innerHTML = '';
+      body.scrollTop = 0;
+      goTo = () => {};
+      if (f.missing) renderMessage(`Can’t find “${f.name}”. Put it in the same folder as this post.`);
+      else if (f.kind === 'pdf') await renderPdf(f);
+      else if (f.kind === 'image') renderImage(f);
+      else if (f.kind === 'text') await renderText(f);
+      else if (f.kind === 'audio' || f.kind === 'video') renderMedia(f);
+      else renderMessage(`${f.ext.toUpperCase()} files can’t be shown here. Tip: save it as a PDF to see it beside your notes.`, f);
+    }
+    goTo(spot, smooth);
+    updateBar(spot);
+  }
+
+  function updateBar(spot: Spot = {}) {
+    const f = files[current];
+    const where = f?.kind === 'pdf' ? `p. ${spot.page || currentPage}` : spot.line ? `line ${spot.line}` : spot.time ? fmtTime(spot.time) : '';
+    document.getElementById('v-bar-where')!.textContent = where;
+  }
+
+  function renderMessage(text: string, f?: File) {
+    body.innerHTML = `<div class="v-msg"><p></p>${f?.url ? `<a class="v-download" href="${f.url}" download="${f.name}">Download ${f.name}</a>` : ''}</div>`;
+    body.querySelector('p')!.textContent = text;
+  }
+
+  function renderImage(f: File) {
+    body.innerHTML = `<a href="${f.url}" target="_blank" rel="noopener" class="v-img"><img src="${f.url}" alt="${f.name}" /></a>`;
+  }
+
+  function renderMedia(f: File) {
+    const el = document.createElement(f.kind === 'audio' ? 'audio' : 'video') as HTMLMediaElement;
+    el.src = f.url;
+    el.controls = true;
+    el.preload = 'metadata';
+    el.setAttribute('playsinline', '');
+    el.className = 'v-media';
+    body.append(el);
+    goTo = (spot) => {
+      if (!spot.time) return;
+      el.currentTime = spot.time;
+      el.play().catch(() => {});
+    };
+  }
+
+  async function renderText(f: File) {
+    body.innerHTML = '<p class="v-loading">Loading…</p>';
+    try {
+      const text = await (await fetch(f.url)).text();
+      const pre = document.createElement('pre');
+      pre.className = 'v-text';
+      text.replace(/\n$/, '').split('\n').forEach((line, n) => {
+        const row = document.createElement('span');
+        row.className = 'v-line';
+        row.dataset.line = String(n + 1);
+        row.textContent = line || ' ';
+        pre.append(row);
+      });
+      body.innerHTML = '';
+      body.append(pre);
+      goTo = (spot, smooth) => {
+        pre.querySelectorAll('.v-line.on').forEach((r) => r.classList.remove('on'));
+        const row = spot.line ? pre.querySelector<HTMLElement>(`[data-line="${spot.line}"]`) : null;
+        if (!row) return;
+        row.classList.add('on');
+        body.scrollTo({ top: row.offsetTop - body.clientHeight / 3, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+      };
+    } catch {
+      renderMessage(`Couldn’t load ${f.name}.`, f);
+    }
+  }
+
+  async function renderPdf(f: File) {
+    body.innerHTML = '<p class="v-loading">Loading PDF…</p>';
+    let pdfjs: typeof import('pdfjs-dist');
+    try {
+      pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      const worker = (await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')).default;
+      pdfjs.GlobalWorkerOptions.workerSrc = worker;
+    } catch {
+      return renderMessage('This browser can’t show PDFs here.', f);
+    }
+    let doc: Awaited<ReturnType<typeof pdfjs.getDocument>['promise']>;
+    try {
+      doc = await pdfjs.getDocument({ url: f.url }).promise;
+    } catch {
+      return renderMessage(`Couldn’t open ${f.name}.`, f);
+    }
+    const mine = current;
+    body.innerHTML = '';
+    const first = await doc.getPage(1);
+    const ratio = first.getViewport({ scale: 1 }).height / first.getViewport({ scale: 1 }).width;
+    const pages: HTMLDivElement[] = [];
+    const rendered = new Map<number, number>(); // page → width it was drawn at
+
+    for (let n = 1; n <= doc.numPages; n++) {
+      const box = document.createElement('div');
+      box.className = 'v-page';
+      box.dataset.page = String(n);
+      box.style.aspectRatio = `1 / ${ratio}`;
+      box.innerHTML = `<span class="v-page-no">${n}</span>`;
+      body.append(box);
+      pages.push(box);
+    }
+
+    async function draw(n: number) {
+      const width = body.clientWidth - 16;
+      if (current !== mine || rendered.get(n) === width || width <= 0) return;
+      rendered.set(n, width);
+      const page = await doc.getPage(n);
+      const vp1 = page.getViewport({ scale: 1 });
+      const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+      const vp = page.getViewport({ scale: (width / vp1.width) * dpr });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(vp.width);
+      canvas.height = Math.floor(vp.height);
+      canvas.setAttribute('aria-label', `Page ${n}`);
+      await page.render({ canvas, canvasContext: canvas.getContext('2d')!, viewport: vp }).promise;
+      const box = pages[n - 1];
+      box.style.aspectRatio = `${vp1.width} / ${vp1.height}`;
+      box.querySelector('canvas')?.remove();
+      box.prepend(canvas);
+    }
+
+    const lazy = new IntersectionObserver(
+      (entries) => entries.forEach((e) => e.isIntersecting && draw(Number((e.target as HTMLElement).dataset.page))),
+      { root: body, rootMargin: '800px 0px' },
+    );
+    pages.forEach((p) => lazy.observe(p));
+
+    // keep the page number up to date as you scroll the PDF
+    const onScroll = () => {
+      const mid = body.scrollTop + body.clientHeight * 0.35;
+      let n = 1;
+      for (const p of pages) if (p.offsetTop <= mid) n = Number(p.dataset.page);
+      currentPage = n;
+      pageLabel.textContent = `${n} / ${doc.numPages}`;
+      updateBar();
+    };
+    body.onscroll = onScroll;
+    const spacer = document.createElement('div');
+    spacer.style.height = '55vh'; // room to bring the last pages to the top
+    body.append(spacer);
+    pager.hidden = false;
+    onScroll();
+
+    goTo = (spot, smooth) => {
+      const n = Math.min(Math.max(spot.page || 0, 0), doc.numPages);
+      if (!n) return;
+      const target = pages[n - 1];
+      body.scrollTo({ top: target.offsetTop - 8, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+      target.classList.remove('flash');
+      void target.offsetWidth;
+      target.classList.add('flash');
+    };
+    document.getElementById('v-prev')!.onclick = () => { manualUntil = Date.now() + 4000; goTo({ page: currentPage - 1 }, true); };
+    document.getElementById('v-next')!.onclick = () => { manualUntil = Date.now() + 4000; goTo({ page: currentPage + 1 }, true); };
+
+    let resizeTimer = 0;
+    new ResizeObserver(() => {
+      clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => pages.forEach((p) => { const r = p.getBoundingClientRect(); if (r.bottom > -800 && r.top < innerHeight + 800) draw(Number(p.dataset.page)); }), 200);
+    }).observe(body);
+  }
+
+  // ── References in the writing ──
+  const refs = [...document.querySelectorAll<HTMLAnchorElement>('.prose a')].filter((a) => {
+    if (a.classList.contains('ref')) return true;
+    const href = a.getAttribute('href') ?? '';
+    return !/^(https?:|mailto:|\/|#)/.test(href) && files.some((f) => f.name === base(href)); // plain links to a file too
+  });
+
+  function spotOf(a: HTMLAnchorElement): Spot {
+    const href = a.getAttribute('href') ?? '';
+    const hash = href.split('#')[1] ?? '';
+    return {
+      page: Number(a.dataset.page || hash.match(/page=(\d+)/)?.[1] || (/^\d+$/.test(hash) ? hash : 0)),
+      line: Number(a.dataset.line || hash.match(/^L(\d+)/)?.[1] || 0),
+      time: Number(a.dataset.time || hash.match(/t=(\d+)/)?.[1] || 0),
+    };
+  }
+
+  for (const a of refs) {
+    const i = fileIndex(a.dataset.file || a.getAttribute('href') || '');
+    a.classList.add('ref');
+    if (i < 0) { a.classList.add('ref-missing'); a.title = 'This file isn’t attached'; continue; }
+    a.dataset.fi = String(i);
+    // without the viewer, the link still opens the file itself
+    const s = spotOf(a);
+    if (files[i].url) a.href = files[i].url + (s.page ? `#page=${s.page}` : s.time ? `#t=${s.time}` : '');
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      manualUntil = Date.now() + 1500;
+      setActive(a.closest<HTMLElement>('p, li, h2, h3, h4, blockquote, td'));
+      if (isPhone()) expand(true);
+      show(i, s, true);
+    });
+  }
+
+  // ── Follow along: as you scroll the notes, the file moves to match ──
+  let active: HTMLElement | null = null;
+  function setActive(el: HTMLElement | null) {
+    if (active === el) return;
+    active?.classList.remove('ref-active');
+    active = el;
+    active?.classList.add('ref-active');
+  }
+  const blocks = new Map<Element, HTMLAnchorElement>();
+  for (const a of refs) {
+    const block = a.closest('p, li, h2, h3, h4, blockquote, td');
+    if (block && !blocks.has(block) && !a.classList.contains('ref-missing')) blocks.set(block, a);
+  }
+  // Pick the reference nearest a reading line about 40% down the screen.
+  const ordered = [...blocks.keys()] as HTMLElement[];
+  function pickActive() {
+    if (!follow.checked || Date.now() < manualUntil || !ordered.length) return;
+    const line = innerHeight * 0.4;
+    const atEnd = scrollY + innerHeight >= document.documentElement.scrollHeight - 4;
+    let best: HTMLElement | null = null;
+    for (const el of ordered) {
+      const r = el.getBoundingClientRect();
+      if (r.top < (atEnd ? innerHeight * 0.9 : line)) best = el;
+    }
+    if (!best && ordered[0].getBoundingClientRect().top < innerHeight * 0.8) best = ordered[0];
+    if (!best || best === active) return;
+    setActive(best);
+    const a = blocks.get(best)!;
+    show(Number(a.dataset.fi), spotOf(a), true);
+  }
+  let ticking = false;
+  addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => { ticking = false; pickActive(); });
+  }, { passive: true });
+  body.addEventListener('wheel', () => (manualUntil = Date.now() + 4000), { passive: true });
+  body.addEventListener('touchstart', () => (manualUntil = Date.now() + 4000), { passive: true });
+  try { follow.checked = localStorage.getItem('follow-along') !== 'off'; } catch {}
+  follow.addEventListener('change', () => { try { localStorage.setItem('follow-along', follow.checked ? 'on' : 'off'); } catch {} });
+
+  // ── Tabs and the phone drawer ──
+  viewer.querySelectorAll<HTMLButtonElement>('.v-tab').forEach((t) => t.addEventListener('click', () => show(Number(t.dataset.i))));
+  function expand(open: boolean) {
+    viewer.toggleAttribute('data-open', open);
+    bar.setAttribute('aria-expanded', String(open));
+    if (open && current >= 0 && files[current].kind === 'pdf') window.dispatchEvent(new Event('resize'));
+  }
+  bar.addEventListener('click', () => expand(!viewer.hasAttribute('data-open')));
+
+  show(0, {}, false);
+</script>
